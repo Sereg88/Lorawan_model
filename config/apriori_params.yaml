@@ -1,0 +1,195 @@
+# =====================================================================
+# АПРИОРНЫЕ ПАРАМЕТРЫ МОДЕЛИ (по техническим описаниям, Таблица 2.3)
+# =====================================================================
+model_type: "apriori"
+
+# 1. Фиксированные системные и протокольные параметры (п. 2.3, 2.4, 2.6)
+system:
+  supply_voltage_v: 3.3           # Напряжение питания обеих цепей U, В
+  region: "EU433"                 # Региональный план
+  frequency_hz: 433175000         # Обязательный канал EU433 (433.175 МГц)
+  bandwidth_khz: 125              # Полоса пропускания BW, кГц
+  coding_rate: 1                  # Скорость кода CR = 4/5 (1 -> 4/5, 2 -> 4/6, 3 -> 4/7, 4 -> 4/8)
+  preamble_symbols: 8             # Длина преамбулы N_pre, символов
+  lorawan_header_bytes: 13        # Служебные поля кадра LoRaWAN, байт (Таблица 2.4)
+  explicit_header: true           # Наличие физического заголовка PHDR (H = 0 в формуле Semtech)
+  crc_enabled: true               # Контрольная сумма пакета (CRC = 1)
+  rx1_delay_ms: 1000.0            # Пауза до первого окна приёма (WAIT_RX1), мс
+  rx2_delay_ms: 1000.0            # Пауза от конца RX1 до начала RX2 (WAIT_RX2), мс
+  rx1_dr_offset: 0                # Смещение скорости для окна RX1
+  rx2_sf: 12                      # Скорость окна RX2 по умолчанию в EU433 (DR0 -> SF12)
+  rx_window_symbols: 8            # Число символов пустого окна приёма N_sym (формула 2.2)
+
+# 2. Параметры класса B (формула 2.5, п. 2.6.1)
+class_b:
+  beacon_period_s: 128.0          # Период маяка T_b, с
+  beacon_sf: 9                    # В плане EU433 маяки передаются на SF9 (125 кГц)
+  beacon_rx_duration_ms: 160.0    # Длительность приёма маяка с учётом окна синхронизации, мс
+  ping_slot_duration_ms: 30.0     # Длительность открытия одного ping-слота, мс
+
+# 3. Параметры радиоканала и алгоритма ADR (формулы 2.6, 2.7)
+channel_adr:
+  tx_power_dbm: 10.0              # Выходная мощность передатчика P_tx, дБм
+  antenna_gain_db: 0.0            # Суммарное усиление антенн G, дБ
+  ref_distance_km: 0.05           # Опорное расстояние d_0 (50 м), км
+  ref_loss_db: 70.0               # Затухание L_0 на расстоянии d_0, дБ (уточняется в серии С7)
+  path_loss_exponent: 2.8         # Показатель затухания gamma (уточняется в серии С7)
+  thermal_noise_dbm: -174.0       # Спектральная плотность теплового шума, дБм/Гц
+  gateway_noise_figure_db: 6.0    # Коэффициент шума приёмника шлюза NF, дБ
+  adr_margin_db: 10.0             # Запас на установку M_adr, дБ (формула 2.7)
+  snr_thresholds_db:              # Требуемое отношение сигнал/шум SNR_req по даташиту SX1278 [7]
+    7: -7.5
+    8: -10.0
+    9: -12.5
+    10: -15.0
+    11: -17.5
+    12: -20.0
+
+# 4. Цепь 1: Радиомодули на базе Semtech SX1278 (Таблица 2.3)
+radio_modules:
+  DRF1278F:
+    sleep_current_ma: 0.0002      # 0.2 мкА
+    idle_current_ma: 0.0015       # 1.5 мкА
+    standby_current_ma: 1.6       # 1.6 мА
+    rx_current_ma: 11.4           # Среднее по диапазону 10.8–12.0 мА (BW = 125 кГц)
+    tx_current_by_p_dbm:          # Зависимость тока передачи от мощности P_tx, мА
+      7: 20.0                     # RFO +7 дБм
+      10: 24.5                    # +10 дБм (интерполяция по графику даташита [7], проверяется в С1)
+      13: 29.0                    # RFO +13 дБм
+      17: 87.0                    # PA_BOOST +17 дБм
+      20: 120.0                   # PA_BOOST +20 дБм
+  EBYTE:
+    # В априорной модели паспортные данные чипа SX1278 идентичны DRF1278F;
+    # реальное отличие из-за внешней схемы управления ВЧ-ключом выявляется в серии С1
+    sleep_current_ma: 0.0002
+    idle_current_ma: 0.0015
+    standby_current_ma: 1.6
+    rx_current_ma: 11.4
+    tx_current_by_p_dbm:
+      7: 20.0
+      10: 24.5
+      13: 29.0
+      17: 87.0
+      20: 120.0
+
+# 5. Цепь 2: Микроконтроллеры и плата DXL-IoT (Таблица 2.3, формула 2.4)
+mcu_configs:
+  # Конфигурация К1: основной МК — ESP32
+  K1_ESP32:
+    mcu_name: "ESP32"
+    base_freq_mhz: 80
+    # Линейная аппроксимация I_mcu(f) = i0_ma + kf_ma_per_mhz * f (по средним точкам Таблицы 2.3)
+    i0_ma: 15.0
+    kf_ma_per_mhz: 0.1375
+    active_current_by_freq_ma:    # Справочные точки из Таблицы 2.3 (средние значения)
+      80: 25.5                    # Диапазон 20–31 мА
+      160: 35.5                   # Диапазон 27–44 мА
+      240: 49.0                   # Диапазон 30–68 мА
+    sleep_modes:
+      light_sleep:
+        current_ma: 0.8           # 0.8 мА
+        wakeup_time_ms: 1.0       # Быстрый выход без перезагрузки
+        wakeup_energy_uj: 8.0     # Оценка энергии выхода E_wu, мкДж (уточняется в С3)
+      deep_sleep:
+        current_ma: 0.010         # 10 мкА (RTC таймер + RTC память)
+        wakeup_time_ms: 15.0      # Выход сопровождается перезагрузкой и инициализацией
+        wakeup_energy_uj: 1250.0  # Оценка E_wu, мкДж (для расчёта времени безубыточности ф. 2.1)
+      hibernation:
+        current_ma: 0.005         # 5 мкА
+        wakeup_time_ms: 25.0
+        wakeup_energy_uj: 2000.0
+    # Длительности вычислений при базовой частоте 80 МГц (масштабируются как 80 / f_cpu)
+    wu_duration_base_ms: 15.0     # Состояние WU (пробуждение и подготовка кадра)
+    pp_duration_base_ms: 5.0      # Состояние PP (завершающая обработка перед сном)
+    board_quiescent_current_ma: 0.0 # В априорной модели токи LDO и USB-UART не учитываются (Г6)
+
+  # Конфигурация К2: основной МК — ATmega328P, а ESP32 в режиме гибернации (5 мкА)
+  K2_ATMEGA:
+    mcu_name: "ATmega328P"
+    base_freq_mhz: 4
+    # Аппроксимация для напряжения 3.3 В (пересчёт с 0.2 мА при 1 МГц, 1.8 В по графикам [12])
+    i0_ma: 0.30
+    kf_ma_per_mhz: 0.45
+    active_current_by_freq_ma:
+      2: 1.2                      # 2 МГц при 3.3 В
+      4: 2.1                      # 4 МГц при 3.3 В
+      8: 3.9                      # 8 МГц при 3.3 В
+    sleep_modes:
+      idle:
+        current_ma: 0.50          # Ожидание с работающей периферией
+        wakeup_time_ms: 0.1
+        wakeup_energy_uj: 0.5
+      power_save:
+        current_ma: 0.0014        # ~1.4 мкА при 3.3 В (0.75 мкА при 1.8 В с часами 32 кГц)
+        wakeup_time_ms: 2.0
+        wakeup_energy_uj: 10.0
+      power_down:
+        current_ma: 0.0002        # ~0.2 мкА при 3.3 В (0.1 мкА при 1.8 В)
+        wakeup_time_ms: 4.0
+        wakeup_energy_uj: 20.0
+    wu_duration_base_ms: 20.0     # При базовой частоте 4 МГц
+    pp_duration_base_ms: 8.0
+    co_mcu_hibernation_ma: 0.005  # Ток гибернации соседнего чипа ESP32 на плате DXL-IoT (5 мкА)
+    board_quiescent_current_ma: 0.0 # В априорной модели = 0 мА (Г6)
+
+# 6. Датчик BME280 (Таблица 2.3, принудительный режим forced mode)
+sensor:
+  name: "BME280"
+  sleep_current_ma: 0.0001        # 0.1 мкА
+  active_current_ma: 0.525        # Среднее по диапазону 0.34–0.71 мА (режим x1 по 3 каналам)
+  measurement_duration_ms: 9.3    # До 9.3 мс на одно измерение
+
+# 7. Элементы питания (Таблица 2.3, Таблица 2.1, формула 2.8)
+batteries:
+  ideal:
+    name: "Идеальный источник (без саморазряда)"
+    capacity_mah: 2400.0
+    usable_fraction_eta: 0.85     # Доля ёмкости до напряжения отсечки eta
+    self_discharge_lambda_per_hour: 0.0
+  li_socl2_aa:
+    name: "Литий-тионилхлоридный элемент AA (Li-SOCl2)"
+    capacity_mah: 2400.0
+    usable_fraction_eta: 0.85
+    # 1 % в год -> lambda = 0.01 / (365.25 * 24) = 1.14077e-6 1/ч
+    self_discharge_lambda_per_hour: 0.0000011408
+  li_ion_18650:
+    name: "Литий-ионный аккумулятор 18650"
+    capacity_mah: 2600.0
+    usable_fraction_eta: 0.85
+    # 3 % в месяц (730.5 ч) -> lambda = 0.03 / 730.5 = 4.10678e-5 1/ч
+    self_discharge_lambda_per_hour: 0.0000410678
+
+# 8. Базовая точка и сетка уровней для вычислительного эксперимента (Таблица 2.1)
+experiment_grid:
+  baseline:
+    sf: 9
+    adr_enabled: false
+    distance_km: 0.005            # Лабораторные условия (5 м)
+    payload_bytes: 12
+    sensor_freq_hz: 0.0166667     # 1/60 Гц (раз в минуту)
+    mcu_config: "K1_ESP32"
+    cpu_freq_mhz: 80
+    sleep_mode: "deep_sleep"
+    wait_mode: "light_sleep"      # Режим ожидания окон RX1/RX2: "active" или "light_sleep"
+    device_class: "A"
+    ping_periodicity_k: null
+    battery_type: "ideal"
+    tx_period_s: 60.0             # T_tx = 60 с
+    radio_module: "DRF1278F"
+
+  factors:
+    sf_levels: [7, 8, 9, 10, 11, 12]
+    adr_levels: [false, true]
+    distance_km_levels: [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 15.0]
+    payload_bytes_levels: [4, 12, 24, 51]
+    sensor_freq_hz_levels: [1.0, 0.1, 0.0166666667] # 1; 0.1; 1/60 Гц
+    mcu_freq_levels:
+      K1_ESP32: [80, 160, 240]
+      K2_ATMEGA: [2, 4, 8]
+    class_levels:
+      - {class: "A", k: null}
+      - {class: "B", k: 7}
+      - {class: "B", k: 4}
+      - {class: "B", k: 1}
+    battery_levels: ["ideal", "li_socl2_aa", "li_ion_18650"]
+    tx_period_min_levels: [1, 5, 10, 15, 30, 60, 120, 360, 720, 1440]
