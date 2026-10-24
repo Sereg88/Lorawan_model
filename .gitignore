@@ -1,5 +1,10 @@
 __pycache__/
-*.pyc 
+*.py[cod]
+*$py.class
 .pytest_cache/
 .venv/
 venv/
+env/
+*.csv
+.ipynb_checkpoints/
+.DS_Store
