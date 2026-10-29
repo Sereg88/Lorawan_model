@@ -103,7 +103,8 @@ def resolve_adr(
     fixed_sf: int = 12,
     initial_sf_when_adr: int = 12,
     tx_power_dbm: float = 10.0,
-    min_tx_power_dbm: float = 7.0,
+    min_tx_power_dbm: float = 2.0,
+    tx_power_step_db: float = 2.0,
     antenna_gain_db: float = 0.0,
     ref_distance_km: float = 0.05,
     ref_loss_db: float = 70.0,
@@ -118,7 +119,9 @@ def resolve_adr(
     Если adr_enabled=False, узел остаётся на fixed_sf и начальной мощности tx_power_dbm.
     Если adr_enabled=True, узел стартует с initial_sf_when_adr (по п. 2.7.3 — с SF12),
     вычисляет запас SNR и N_step = floor((SNR - SNR_req - M_adr) / 3),
-    после чего снижает SF вплоть до SF7 (DR5), а оставшиеся шаги тратит на снижение мощности.
+    после чего снижает SF вплоть до SF7 (DR5), а оставшиеся шаги тратит на снижение мощности:
+    каждый шаг увеличивает индекс TXPower на 1, т. е. снижает мощность на tx_power_step_db
+    (2 дБ в планах EU433 и EU868) до min_tx_power_dbm.
     """
     lb = calc_link_budget(
         distance_km=distance_km,
@@ -164,9 +167,9 @@ def resolve_adr(
         current_sf -= sf_drop
         remaining_steps -= sf_drop
 
-        # Если после достижения SF7 остались положительные шаги, снижаем мощность передатчика (по 3 дБ за шаг)
+        # Если после достижения SF7 остались положительные шаги, снижаем мощность передатчика (по индексу TXPower)
         if remaining_steps > 0:
-            p_drop = remaining_steps * 3.0
+            p_drop = remaining_steps * tx_power_step_db
             current_p_tx = max(min_tx_power_dbm, current_p_tx - p_drop)
 
     # Проверяем, выполняется ли условие связи при итоговом SF и итоговой мощности
@@ -176,7 +179,7 @@ def resolve_adr(
     # Если при слишком большом расстоянии запас отрицательный и даже на стартовом SF связи нет,
     # возвращаем SF12 и максимальную мощность
     if not feasible and current_sf < 12:
-        # Подбираем минимальный SF, при котором выполняется условие SNR >= SNR_req(SF) + M_adr
+        # Подбираем минимальный SF, при котором выполняется условие связи SNR >= SNR_req(SF) (без запаса M_adr)
         for candidate_sf in range(7, 13):
             if lb.snr_db >= snr_thresholds_db[candidate_sf]:
                 current_sf = candidate_sf

@@ -1,7 +1,11 @@
 # =====================================================================
-# ОТКАЛИБРОВАННЫЕ ПАРАМЕТРЫ МОДЕЛИ (по результатам измерений С0–С7)
+# ОТКАЛИБРОВАННЫЕ ПАРАМЕТРЫ МОДЕЛИ — ШАБЛОН (ЗАГЛУШКА)
+# Серии С0–С8 ещё не проведены: значения ниже условные и служат только для
+# отладки программы. Их нельзя приводить в отчёте как результаты измерений.
+# После каждой серии замените значения измеренными и укажите номер протокола.
 # =====================================================================
 model_type: "calibrated"
+data_status: "placeholder"        # "placeholder" -> "measured" после заполнения по протоколам С0–С8
 
 system:
   supply_voltage_v: 3.3
@@ -13,24 +17,27 @@ system:
   lorawan_header_bytes: 13
   explicit_header: true
   crc_enabled: true
-  rx1_delay_ms: 1002.5            # Уточнено по осциллограммам серии С1
-  rx2_delay_ms: 1001.8            # Уточнено по осциллограммам серии С1
+  rx1_delay_ms: 1002.5            # Заглушка: от конца TX до RX1 (заменить по осциллограммам С1)
+  rx2_delay_ms: 2001.8            # Заглушка: от конца TX до RX2 (заменить по осциллограммам С1)
   rx1_dr_offset: 0
   rx2_sf: 12
-  rx_window_symbols: 10           # Реальное число символов окна RX стека LoRaMac-node
+  rx_window_symbols: 10           # Заглушка: число символов окна RX (заменить по осциллограммам С1)
 
 class_b:
   beacon_period_s: 128.0
+  beacon_window_s: 122.88
   beacon_sf: 9
-  beacon_rx_duration_ms: 175.0    # Уточнено в серии С6 с учётом запаса на дрейф таймера
-  ping_slot_duration_ms: 32.5     # Уточнено в серии С6
+  beacon_rx_duration_ms: 175.0    # Заглушка (заменить по серии С6)
+  ping_slot_duration_ms: 32.5     # Заглушка (заменить по серии С6)
 
 channel_adr:
   tx_power_dbm: 10.0
+  min_tx_power_dbm: 2.0
+  tx_power_step_db: 2.0
   antenna_gain_db: 0.0
   ref_distance_km: 0.05
-  ref_loss_db: 72.4               # Определено по полевым измерениям RSSI в серии С7
-  path_loss_exponent: 2.95        # Определено по полевым измерениям RSSI в серии С7
+  ref_loss_db: 72.4               # Заглушка (определить по RSSI серии С7, fit_path_loss_params)
+  path_loss_exponent: 2.95        # Заглушка (определить по RSSI серии С7, fit_path_loss_params)
   thermal_noise_dbm: -174.0
   gateway_noise_figure_db: 6.0
   adr_margin_db: 10.0
@@ -44,25 +51,25 @@ channel_adr:
 
 radio_modules:
   DRF1278F:
-    sleep_current_ma: 0.0012      # Измерено мультиметром в серии С3 (1.2 мкА)
+    sleep_current_ma: 0.0012      # Заглушка (измерить мультиметром в серии С3)
     idle_current_ma: 0.0025
     standby_current_ma: 1.75
-    rx_current_ma: 11.8           # Измерено в серии С1
+    rx_current_ma: 11.8           # Заглушка (измерить в серии С1)
     tx_current_by_p_dbm:
       7: 21.5
-      10: 28.4                    # Реальный ток при +10 дБм (серия С1)
+      10: 28.4                    # Заглушка (измерить в серии С1)
       13: 32.0
       17: 91.0
       20: 124.0
   EBYTE:
-    # Внешняя обвязка и ВЧ-коммутатор модуля EBYTE увеличивают потребление (п. 2.3, серия С1)
-    sleep_current_ma: 0.0045      # 4.5 мкА
+    # Заглушка: отличие от DRF1278F из-за внешней обвязки модуля ожидается по [5], проверяется в серии С1
+    sleep_current_ma: 0.0045      # Заглушка
     idle_current_ma: 0.0060
     standby_current_ma: 2.10
     rx_current_ma: 14.2
     tx_current_by_p_dbm:
       7: 35.0
-      10: 46.8                    # Существенно выше DRF1278F при той же мощности
+      10: 46.8                    # Заглушка
       13: 54.0
       17: 110.0
       20: 138.0
@@ -71,7 +78,7 @@ mcu_configs:
   K1_ESP32:
     mcu_name: "ESP32"
     base_freq_mhz: 80
-    i0_ma: 18.2                   # Уточнено в серии С4
+    i0_ma: 18.2                   # Заглушка (уточнить по серии С4)
     kf_ma_per_mhz: 0.145
     active_current_by_freq_ma:
       80: 29.8
@@ -79,21 +86,21 @@ mcu_configs:
       240: 53.0
     sleep_modes:
       light_sleep:
-        current_ma: 0.92          # Измерено в серии С3
+        current_ma: 0.92          # Заглушка (измерить в серии С3)
         wakeup_time_ms: 1.4
         wakeup_energy_uj: 12.5
       deep_sleep:
-        current_ma: 0.015         # 15 мкА (чип ESP32)
-        wakeup_time_ms: 28.5      # Фактическое время загрузки загрузчика и инициализации стека
-        wakeup_energy_uj: 2650.0  # Измерено по осциллограмме выхода из глубокого сна (С3)
+        current_ma: 0.015         # Заглушка (измерить в серии С3)
+        wakeup_time_ms: 28.5      # Заглушка (время выхода из глубокого сна, серия С3)
+        wakeup_energy_uj: 2650.0  # Заглушка (энергия выхода из глубокого сна, серия С3)
       hibernation:
         current_ma: 0.006
         wakeup_time_ms: 35.0
         wakeup_energy_uj: 3100.0
-    wu_duration_base_ms: 28.5
+    wu_duration_base_ms: 28.5     # Заглушка: подготовка кадра без выхода из сна (серия С1)
     pp_duration_base_ms: 6.4
-    # Фоновый ток платы DXL-IoT (LDO стабилизатор + USB-UART мост без светодиодов, серия С0/С3)
-    board_quiescent_current_ma: 0.085 # 85 мкА — ключевой фактор для проверки гипотезы Г6!
+    # Фоновый ток платы DXL-IoT (LDO стабилизатор + USB-UART мост без светодиодов)
+    board_quiescent_current_ma: 0.085 # Заглушка (измерить в сериях С0/С3; ключевой параметр для Г6)
 
   K2_ATMEGA:
     mcu_name: "ATmega328P"
@@ -114,18 +121,18 @@ mcu_configs:
         wakeup_time_ms: 2.4
         wakeup_energy_uj: 14.0
       power_down:
-        current_ma: 0.0005
+        current_ma: 0.0045        # Заглушка: с включённым WDT (измерить в серии С3)
         wakeup_time_ms: 4.5
         wakeup_energy_uj: 25.0
     wu_duration_base_ms: 24.0
     pp_duration_base_ms: 9.5
     co_mcu_hibernation_ma: 0.006
-    board_quiescent_current_ma: 0.085 # 85 мкА фоновый ток платы DXL-IoT
+    board_quiescent_current_ma: 0.085 # Заглушка (измерить в сериях С0/С3)
 
 sensor:
   name: "BME280"
   sleep_current_ma: 0.0002        # 0.2 мкА
-  active_current_ma: 0.58         # Измерено в серии С5
+  active_current_ma: 0.58         # Заглушка (измерить в серии С5)
   measurement_duration_ms: 9.6
 
 batteries:

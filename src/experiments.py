@@ -53,15 +53,21 @@ class SensitivityItem:
 
 @dataclass(frozen=True)
 class PfeRegressionResult:
-    """Результаты обработки полного факторного эксперимента 2^3 (Таблица 2.6, формула 2.12)."""
+    """
+    Результаты обработки полного факторного эксперимента 2^3 (Таблица 2.6, формула 2.12).
+    Статистические поля равны None, если повторных наблюдений нет (расчёт по модели):
+    значимость коэффициентов и однородность дисперсий проверяются только по измерениям.
+    """
     y_means_log10: np.ndarray         # Средние значения отклика y_u = lg(I_avg) в 8 точках плана
     coefficients: Dict[str, float]    # Коэффициенты b0, b1, b2, b3, b12, b13, b23, b123
-    reproducibility_std_sy: float     # СКО воспроизводимости s_y
-    coeff_std_error_sb: float         # СКО коэффициентов s_b = s_y / sqrt(N * n)
-    t_critical: float                 # Критическое значение Стьюдента t_(0.05; N*(n-1))
-    significant_terms: Dict[str, bool]
-    cochran_g_obs: float              # Наблюдаемое значение критерия Кохрена G_obs
-    cochran_dispersions_uniform: bool
+    n_repeats: int                    # Число повторных наблюдений n в каждой точке плана
+    reproducibility_std_sy: float | None    # СКО воспроизводимости s_y
+    coeff_std_error_sb: float | None        # СКО коэффициентов s_b = s_y / sqrt(N * n)
+    t_critical: float | None                # Критическое значение Стьюдента t_(0.05; N*(n-1))
+    significant_terms: Dict[str, bool] | None
+    cochran_g_obs: float | None             # Наблюдаемое значение критерия Кохрена G_obs
+    cochran_g_critical: float | None        # Критическое значение G_(0.05; n-1; N)
+    cochran_dispersions_uniform: bool | None
 
 
 def calc_elasticity_formula_2_11(
@@ -155,82 +161,123 @@ def compute_sensitivity_ranking(
     return items
 
 
-def run_pfe_2_3_experiment(
-    config: Dict[str, Any],
-    tx_period_s: float = 60.0,
-    n_repeats: int = 5,
-    repeat_rel_std: float = 0.005,
-    random_seed: int = 42,
-) -> PfeRegressionResult:
+def cochran_critical_value(n_runs: int, n_repeats: int, alpha: float = 0.05) -> float:
     """
-    Выполняет полный факторный эксперимент 2^3 по матрице Таблицы 2.6 (п. 2.8.3, формула 2.12):
+    Критическое значение критерия Кохрена G_(alpha; f = n - 1; N) через F-распределение:
+    G = F / (F + N - 1), где F = F_(1 - alpha/N; f; (N - 1) f).
+    Для N = 8, n = 5 даёт 0,3910 (n = 3 -> 0,5157).
+    """
+    f = n_repeats - 1
+    if f < 1 or n_runs < 2:
+        raise ValueError("Для критерия Кохрена нужно не менее двух опытов и двух повторений в каждом.")
+    f_crit = float(stats.f.ppf(1.0 - alpha / n_runs, f, (n_runs - 1) * f))
+    return f_crit / (f_crit + n_runs - 1)
+
+
+def calc_pfe_model_points(config: Dict[str, Any], tx_period_s: float = 60.0) -> np.ndarray:
+    """
+    Средний ток I_avg (мА) по модели в 8 точках плана Таблицы 2.6 (п. 2.8.3):
     - x1: SF (-1 -> SF7; +1 -> SF12)
     - x2: Размер полезной нагрузки (-1 -> 12 байт; +1 -> 51 байт)
     - x3: Класс устройства (-1 -> Класс A; +1 -> Класс B, k = 4)
-    Отклик: y = lg(I_avg) при T_tx = 60 с.
     """
-    rng = np.random.default_rng(random_seed)
-    n_runs = 8
-    y_repeats = np.zeros((n_runs, n_repeats), dtype=float)
-
-    for u in range(n_runs):
-        x1, x2, x3 = PFE_2_3_DESIGN_MATRIX[u, 1], PFE_2_3_DESIGN_MATRIX[u, 2], PFE_2_3_DESIGN_MATRIX[u, 3]
-        sf_val = 7 if x1 < 0 else 12
-        pl_val = 12 if x2 < 0 else 51
-        cls_val = "A" if x3 < 0 else "B"
-        k_val = None if x3 < 0 else 4
-
+    points = np.zeros(PFE_2_3_DESIGN_MATRIX.shape[0], dtype=float)
+    for u, row in enumerate(PFE_2_3_DESIGN_MATRIX):
+        x1, x2, x3 = row[1], row[2], row[3]
         res = evaluate_node_energy_budget(
             config,
-            sf=sf_val,
-            payload_bytes=pl_val,
-            device_class=cls_val,
-            ping_periodicity_k=k_val,
+            sf=7 if x1 < 0 else 12,
+            payload_bytes=12 if x2 < 0 else 51,
+            device_class="A" if x3 < 0 else "B",
+            ping_periodicity_k=None if x3 < 0 else 4,
             tx_period_s=tx_period_s,
         )
-        i_nom = res.i_avg_total_ma
+        points[u] = res.i_avg_total_ma
+    return points
 
-        # Моделируем n=5 повторных наблюдений с малой дисперсией воспроизводимости (п. 2.8.4)
-        for r in range(n_repeats):
-            noise_factor = 1.0 + rng.normal(0.0, repeat_rel_std) if repeat_rel_std > 0 else 1.0
-            y_repeats[u, r] = math.log10(max(1e-9, i_nom * noise_factor))
 
+def process_pfe_2_3(i_avg_ma: Sequence[float] | np.ndarray, alpha: float = 0.05) -> PfeRegressionResult:
+    """
+    Обработка ПФЭ 2^3 по формуле (2.12) для отклика y = lg(I_avg).
+    i_avg_ma: массив формы (8,) — одно значение на опыт (модель), или (8, n) — n повторных измерений.
+    При n >= 2 проверяются однородность дисперсий (Кохрен) и значимость коэффициентов (Стьюдент).
+    """
+    i_arr = np.asarray(i_avg_ma, dtype=float)
+    if i_arr.ndim == 1:
+        i_arr = i_arr[:, None]
+    n_runs, n_repeats = i_arr.shape
+    if n_runs != PFE_2_3_DESIGN_MATRIX.shape[0]:
+        raise ValueError(f"Ожидается 8 опытов плана Таблицы 2.6, получено: {n_runs}")
+    if np.any(i_arr <= 0):
+        raise ValueError("Значения среднего тока должны быть положительными.")
+
+    y_repeats = np.log10(i_arr)
     y_means = np.mean(y_repeats, axis=1)
-    row_variances = np.var(y_repeats, axis=1, ddof=1) if n_repeats > 1 else np.zeros(n_runs)
+
+    # Расчёт коэффициентов по формуле (2.12): b_j = (1 / N) * sum(x_uj * y_u)
+    coeffs: Dict[str, float] = {
+        term_name: float(np.dot(PFE_2_3_DESIGN_MATRIX[:, j], y_means) / n_runs)
+        for j, term_name in enumerate(PFE_TERM_NAMES)
+    }
+
+    if n_repeats < 2:
+        return PfeRegressionResult(
+            y_means_log10=y_means,
+            coefficients=coeffs,
+            n_repeats=n_repeats,
+            reproducibility_std_sy=None,
+            coeff_std_error_sb=None,
+            t_critical=None,
+            significant_terms=None,
+            cochran_g_obs=None,
+            cochran_g_critical=None,
+            cochran_dispersions_uniform=None,
+        )
+
+    row_variances = np.var(y_repeats, axis=1, ddof=1)
 
     # Проверка однородности дисперсий по критерию Кохрена
     sum_var = float(np.sum(row_variances))
-    g_obs = float(np.max(row_variances) / sum_var) if sum_var > 1e-18 else 0.0
-    # Табличный порог Кохрена для N=8, df=4 (n=5) при alpha=0.05 равен 0.5157
-    cochran_ok = g_obs <= 0.5157
+    g_obs = float(np.max(row_variances) / sum_var) if sum_var > 0 else 0.0
+    g_crit = cochran_critical_value(n_runs, n_repeats, alpha)
 
     # СКО воспроизводимости s_y и СКО коэффициентов s_b
     s_y2 = float(np.mean(row_variances))
     s_y = math.sqrt(s_y2)
-    s_b = math.sqrt(s_y2 / (n_runs * n_repeats)) if s_y2 > 0 else 1e-12
+    s_b = math.sqrt(s_y2 / (n_runs * n_repeats))
+    t_crit = float(stats.t.ppf(1.0 - alpha / 2.0, df=n_runs * (n_repeats - 1)))
 
-    df_total = n_runs * max(1, n_repeats - 1)
-    t_crit = float(stats.t.ppf(1.0 - 0.05 / 2.0, df=df_total))
-
-    # Расчёт коэффициентов по формуле (2.12): b_j = (1 / N) * sum(x_uj * y_u)
-    coeffs: Dict[str, float] = {}
-    significant: Dict[str, bool] = {}
-    for j, term_name in enumerate(PFE_TERM_NAMES):
-        b_j = float(np.dot(PFE_2_3_DESIGN_MATRIX[:, j], y_means) / n_runs)
-        coeffs[term_name] = b_j
-        t_j = abs(b_j) / s_b if s_b > 1e-15 else float("inf")
-        significant[term_name] = bool(t_j > t_crit)
+    significant = {
+        term_name: bool(abs(b_j) > t_crit * s_b) for term_name, b_j in coeffs.items()
+    }
 
     return PfeRegressionResult(
         y_means_log10=y_means,
         coefficients=coeffs,
+        n_repeats=n_repeats,
         reproducibility_std_sy=s_y,
         coeff_std_error_sb=s_b,
         t_critical=t_crit,
         significant_terms=significant,
         cochran_g_obs=g_obs,
-        cochran_dispersions_uniform=cochran_ok,
+        cochran_g_critical=g_crit,
+        cochran_dispersions_uniform=g_obs <= g_crit,
     )
+
+
+def run_pfe_2_3_experiment(
+    config: Dict[str, Any],
+    tx_period_s: float = 60.0,
+    measured_i_avg_ma: Sequence[Sequence[float]] | np.ndarray | None = None,
+) -> PfeRegressionResult:
+    """
+    Полный факторный эксперимент 2^3 по матрице Таблицы 2.6 (п. 2.8.3, формула 2.12).
+    Без measured_i_avg_ma коэффициенты считаются по модели (без проверки значимости);
+    с measured_i_avg_ma формы (8, n) — по измеренным средним токам серий С1, С2, С6.
+    """
+    if measured_i_avg_ma is not None:
+        return process_pfe_2_3(measured_i_avg_ma)
+    return process_pfe_2_3(calc_pfe_model_points(config, tx_period_s))
 
 
 def run_factorial_sweep(
@@ -244,11 +291,15 @@ def run_factorial_sweep(
     class_levels: Sequence[Dict[str, Any]] | None = None,
     battery_levels: Sequence[str] | None = None,
     tx_period_min_levels: Sequence[float] | None = None,
+    wait_mode_levels: Sequence[str] | None = None,
+    drop_infeasible: bool = False,
     output_csv_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """
     Пункт 2.8.1: выполняет полный факторный перебор заданных уровней Таблицы 2.1
     и возвращает таблицу pandas.DataFrame (при указании output_csv_path сохраняет в CSV).
+    wait_mode_levels: режимы ожидания окон RX1/RX2 для гипотезы Г5 (по умолчанию — из базовой точки).
+    drop_infeasible: исключить сочетания, при которых связь со шлюзом невозможна (link_feasible = False).
     """
     fac = config["experiment_grid"]["factors"]
     sfs = sf_levels if sf_levels is not None else fac["sf_levels"]
@@ -259,6 +310,10 @@ def run_factorial_sweep(
     classes = class_levels if class_levels is not None else fac["class_levels"]
     bats = battery_levels if battery_levels is not None else fac["battery_levels"]
     t_mins = tx_period_min_levels if tx_period_min_levels is not None else fac["tx_period_min_levels"]
+    if wait_mode_levels is not None:
+        waits = wait_mode_levels
+    else:
+        waits = fac.get("wait_mode_levels", [config["experiment_grid"]["baseline"].get("wait_mode", "light_sleep")])
 
     if mcu_configs_and_freqs is None:
         mcu_pairs: List[tuple[str, float]] = []
@@ -269,8 +324,8 @@ def run_factorial_sweep(
         mcu_pairs = list(mcu_configs_and_freqs)
 
     rows: List[Dict[str, Any]] = []
-    for sf, adr, dist, pl, fs, (m_key, f_cpu), cls_item, bat, t_min in itertools.product(
-        sfs, adrs, dists, pls, f_sens, mcu_pairs, classes, bats, t_mins
+    for sf, adr, dist, pl, fs, (m_key, f_cpu), cls_item, bat, t_min, wait in itertools.product(
+        sfs, adrs, dists, pls, f_sens, mcu_pairs, classes, bats, t_mins, waits
     ):
         res = evaluate_node_energy_budget(
             config,
@@ -285,7 +340,10 @@ def run_factorial_sweep(
             ping_periodicity_k=cls_item.get("k"),
             battery_type=str(bat),
             tx_period_s=float(t_min) * 60.0,
+            wait_mode=str(wait),
         )
+        if drop_infeasible and not res.adr_info.link_feasible:
+            continue
         rows.append(
             {
                 "model_type": config.get("model_type", "unknown"),
@@ -301,6 +359,7 @@ def run_factorial_sweep(
                 "ping_k": res.ping_periodicity_k,
                 "battery_type": bat,
                 "tx_period_min": t_min,
+                "wait_mode": res.wait_mode,
                 "i_avg_ma": res.i_avg_total_ma,
                 "e_tx_rx_mj": res.e_tx_rx_cycle_mj,
                 "e_cycle_total_mj": res.e_cycle_total_mj,

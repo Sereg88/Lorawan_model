@@ -119,6 +119,16 @@ def calc_mcu_active_current_ma(
     return core_ma + board_q_ma + co_mcu_ma
 
 
+def get_sleep_wakeup_cost(mode_cfg: Dict[str, Any], voltage_v: float) -> tuple[float, float]:
+    """
+    Возвращает длительность (мс) и заряд (мКл) выхода МК из режима сна по параметрам sleep_modes:
+    t_wu = wakeup_time_ms, Q_wu = E_wu / U (мкДж / В = мкКл, делением на 1000 переводится в мКл).
+    """
+    t_wu_ms = float(mode_cfg.get("wakeup_time_ms", 0.0))
+    q_wu_mc = float(mode_cfg.get("wakeup_energy_uj", 0.0)) / voltage_v / 1000.0
+    return t_wu_ms, q_wu_mc
+
+
 def get_radio_tx_current_ma(radio_cfg: Dict[str, Any], tx_power_dbm: float) -> float:
     """Возвращает ток радиомодуля при передаче на заданной мощности P_tx (с линейной интерполяцией)."""
     p_table = {float(k): float(v) for k, v in radio_cfg["tx_current_by_p_dbm"].items()}
@@ -202,6 +212,8 @@ def evaluate_node_energy_budget(
         fixed_sf=sf_val,
         initial_sf_when_adr=12,
         tx_power_dbm=float(ch_cfg["tx_power_dbm"]),
+        min_tx_power_dbm=float(ch_cfg.get("min_tx_power_dbm", 2.0)),
+        tx_power_step_db=float(ch_cfg.get("tx_power_step_db", 2.0)),
         antenna_gain_db=float(ch_cfg["antenna_gain_db"]),
         ref_distance_km=float(ch_cfg["ref_distance_km"]),
         ref_loss_db=float(ch_cfg["ref_loss_db"]),
@@ -267,9 +279,22 @@ def evaluate_node_energy_budget(
     i_rad_rx_ma = float(radio_cfg["rx_current_ma"])
     i_rad_tx_ma = get_radio_tx_current_ma(radio_cfg, actual_p_tx)
 
+    # Выход из основного режима сна (формула 2.1): каждое пробуждение стоит E_wu и t_wu,
+    # не зависящих от тактовой частоты (для ESP32 deep sleep — перезагрузка и инициализация)
+    t_wake_ms, q_wake_mc = get_sleep_wakeup_cost(mcu_cfg["sleep_modes"][sleep_key], voltage_v)
+
     # 4. Заполнение профиля состояний по двум цепям питания (рисунок 2.3)
     profile = CycleProfile(voltage_v=voltage_v)
-    profile.add_state(NodeState.WU, wu_ms, i_rad_standby_ma, i_mcu_active_ma + i_sens_sleep_ma)
+    # WU = выход из сна + подготовка кадра (wu_ms масштабируется по частоте, формула 2.4)
+    wu_total_ms = t_wake_ms + wu_ms
+    q_wu_radio_mc = (i_rad_sleep_ma * t_wake_ms + i_rad_standby_ma * wu_ms) / 1000.0
+    q_wu_mcu_mc = q_wake_mc + (i_mcu_active_ma + i_sens_sleep_ma) * wu_ms / 1000.0
+    profile.add_state(
+        NodeState.WU,
+        wu_total_ms,
+        1000.0 * q_wu_radio_mc / wu_total_ms,
+        1000.0 * q_wu_mcu_mc / wu_total_ms,
+    )
     profile.add_state(NodeState.TX, timings.tx_ms, i_rad_tx_ma, i_mcu_active_ma + i_sens_sleep_ma)
     profile.add_state(NodeState.WAIT_RX1, timings.wait_rx1_ms, i_rad_sleep_ma, i_mcu_wait_ma)
     profile.add_state(NodeState.RX1, timings.rx1_ms, i_rad_rx_ma, i_mcu_active_ma + i_sens_sleep_ma)
@@ -291,11 +316,13 @@ def evaluate_node_energy_budget(
     t_act_ms = profile.get_active_duration_ms()
     t_act_s = t_act_ms / 1000.0
 
-    # Число измерений датчика за период передачи T_tx
+    # Число измерений датчика за период передачи T_tx. Одно измерение выполняется в пробуждении
+    # для передачи, остальные требуют отдельного выхода МК из сна (E_wu, t_wu)
     n_sensor_reads = f_sens_val * t_tx_s
-    t_sensor_total_s = n_sensor_reads * (sens_dur_ms / 1000.0)
+    n_sensor_wakeups = max(0.0, n_sensor_reads - 1.0)
+    t_sensor_total_s = (n_sensor_reads * sens_dur_ms + n_sensor_wakeups * t_wake_ms) / 1000.0
     q_sensor_One_mc = profile.get_state_charge_mc(NodeState.SENSOR, PowerCircuit.MCU_BOARD)
-    q_sensor_period_mc = n_sensor_reads * q_sensor_One_mc
+    q_sensor_period_mc = n_sensor_reads * q_sensor_One_mc + n_sensor_wakeups * q_wake_mc
 
     # Длительность сна за период передачи
     t_sleep_s = max(0.0, t_tx_s - t_act_s - t_sensor_total_s)
@@ -328,17 +355,29 @@ def evaluate_node_energy_budget(
         b_dur_ms = float(cb_cfg["beacon_rx_duration_ms"])
         p_dur_ms = float(cb_cfg["ping_slot_duration_ms"])
 
-        profile.add_state(NodeState.BEACON_RX, b_dur_ms, i_rad_rx_ma, i_mcu_active_ma + i_sens_sleep_ma)
-        profile.add_state(NodeState.PING_SLOT, p_dur_ms, i_rad_rx_ma, i_mcu_active_ma + i_sens_sleep_ma)
+        # Каждый приём маяка и каждый ping-слот начинается с выхода МК из основного режима сна
+        for st_b, rx_ms in ((NodeState.BEACON_RX, b_dur_ms), (NodeState.PING_SLOT, p_dur_ms)):
+            dur_ms = t_wake_ms + rx_ms
+            q_rad_mc = (i_rad_sleep_ma * t_wake_ms + i_rad_rx_ma * rx_ms) / 1000.0
+            q_mcu_mc = q_wake_mc + (i_mcu_active_ma + i_sens_sleep_ma) * rx_ms / 1000.0
+            profile.add_state(st_b, dur_ms, 1000.0 * q_rad_mc / dur_ms, 1000.0 * q_mcu_mc / dur_ms)
 
-        q_b_mc = profile.get_state_charge_mc(NodeState.BEACON_RX)
-        q_p_mc = profile.get_state_charge_mc(NodeState.PING_SLOT)
+        # Заряд события сверх тока сна: время маяков и ping-слотов уже входит в состояние SLEEP
+        sleep_current_by_circuit = {PowerCircuit.RADIO: i_rad_sleep_ma, PowerCircuit.MCU_BOARD: i_mcu_deep_sleep_ma}
+
+        def net_charge_mc(st_b: NodeState, circuit: PowerCircuit) -> float:
+            dur_s = profile.states[st_b][circuit].duration_s
+            return profile.get_state_charge_mc(st_b, circuit) - sleep_current_by_circuit[circuit] * dur_s
+
+        q_b_mc = sum(net_charge_mc(NodeState.BEACON_RX, c) for c in PowerCircuit)
+        q_p_mc = sum(net_charge_mc(NodeState.PING_SLOT, c) for c in PowerCircuit)
 
         class_b_info = calc_class_b_current_addon(
             periodicity_k=k_int,
             q_beacon_mc=q_b_mc,
             q_ping_mc=q_p_mc,
             beacon_period_s=float(cb_cfg["beacon_period_s"]),
+            beacon_window_s=float(cb_cfg.get("beacon_window_s", 122.88)),
         )
         delta_i_b_ma = class_b_info.delta_i_class_b_ma
 
@@ -346,12 +385,12 @@ def evaluate_node_energy_budget(
         scale_b = t_tx_s / float(cb_cfg["beacon_period_s"])
         slots = class_b_info.slots_per_beacon
         q_class_b_radio_per_tx_mc = scale_b * (
-            profile.get_state_charge_mc(NodeState.BEACON_RX, PowerCircuit.RADIO)
-            + slots * profile.get_state_charge_mc(NodeState.PING_SLOT, PowerCircuit.RADIO)
+            net_charge_mc(NodeState.BEACON_RX, PowerCircuit.RADIO)
+            + slots * net_charge_mc(NodeState.PING_SLOT, PowerCircuit.RADIO)
         )
         q_class_b_mcu_per_tx_mc = scale_b * (
-            profile.get_state_charge_mc(NodeState.BEACON_RX, PowerCircuit.MCU_BOARD)
-            + slots * profile.get_state_charge_mc(NodeState.PING_SLOT, PowerCircuit.MCU_BOARD)
+            net_charge_mc(NodeState.BEACON_RX, PowerCircuit.MCU_BOARD)
+            + slots * net_charge_mc(NodeState.PING_SLOT, PowerCircuit.MCU_BOARD)
         )
 
     i_avg_total_ma = i_avg_class_a_ma + delta_i_b_ma

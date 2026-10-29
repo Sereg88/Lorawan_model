@@ -14,8 +14,8 @@ system:
   lorawan_header_bytes: 13        # Служебные поля кадра LoRaWAN, байт (Таблица 2.4)
   explicit_header: true           # Наличие физического заголовка PHDR (H = 0 в формуле Semtech)
   crc_enabled: true               # Контрольная сумма пакета (CRC = 1)
-  rx1_delay_ms: 1000.0            # Пауза до первого окна приёма (WAIT_RX1), мс
-  rx2_delay_ms: 1000.0            # Пауза от конца RX1 до начала RX2 (WAIT_RX2), мс
+  rx1_delay_ms: 1000.0            # RECEIVE_DELAY1: от конца передачи до открытия RX1, мс
+  rx2_delay_ms: 2000.0            # RECEIVE_DELAY2: от конца передачи до открытия RX2, мс (WAIT_RX2 = 2000 - 1000 - T_rx1)
   rx1_dr_offset: 0                # Смещение скорости для окна RX1
   rx2_sf: 12                      # Скорость окна RX2 по умолчанию в EU433 (DR0 -> SF12)
   rx_window_symbols: 8            # Число символов пустого окна приёма N_sym (формула 2.2)
@@ -23,14 +23,17 @@ system:
 # 2. Параметры класса B (формула 2.5, п. 2.6.1)
 class_b:
   beacon_period_s: 128.0          # Период маяка T_b, с
-  beacon_sf: 9                    # В плане EU433 маяки передаются на SF9 (125 кГц)
+  beacon_window_s: 122.88         # Окно ping-слотов: 4096 слотов по 30 мс (T_ping = 0.96 * 2^k с)
+  beacon_sf: 9                   # В плане EU433 маяки передаются на SF9 (125 кГц)
   beacon_rx_duration_ms: 160.0    # Длительность приёма маяка с учётом окна синхронизации, мс
   ping_slot_duration_ms: 30.0     # Длительность открытия одного ping-слота, мс
 
 # 3. Параметры радиоканала и алгоритма ADR (формулы 2.6, 2.7)
 channel_adr:
   tx_power_dbm: 10.0              # Выходная мощность передатчика P_tx, дБм
-  antenna_gain_db: 0.0            # Суммарное усиление антенн G, дБ
+  min_tx_power_dbm: 2.0           # Нижняя граница мощности при ADR (TXPower 5 в EU433: 12.15 - 10 дБм)
+  tx_power_step_db: 2.0           # Шаг индекса TXPower в EU433, дБ
+  antenna_gain_db: 0.0           # Суммарное усиление антенн G, дБ
   ref_distance_km: 0.05           # Опорное расстояние d_0 (50 м), км
   ref_loss_db: 70.0               # Затухание L_0 на расстоянии d_0, дБ (уточняется в серии С7)
   path_loss_exponent: 2.8         # Показатель затухания gamma (уточняется в серии С7)
@@ -98,8 +101,9 @@ mcu_configs:
         current_ma: 0.005         # 5 мкА
         wakeup_time_ms: 25.0
         wakeup_energy_uj: 2000.0
-    # Длительности вычислений при базовой частоте 80 МГц (масштабируются как 80 / f_cpu)
-    wu_duration_base_ms: 15.0     # Состояние WU (пробуждение и подготовка кадра)
+    # Длительности вычислений при базовой частоте 80 МГц (масштабируются как 80 / f_cpu).
+    # Выход из сна (wakeup_time_ms, wakeup_energy_uj выбранного режима) добавляется к WU отдельно
+    wu_duration_base_ms: 15.0     # Подготовка кадра в состоянии WU (после выхода из сна)
     pp_duration_base_ms: 5.0      # Состояние PP (завершающая обработка перед сном)
     board_quiescent_current_ma: 0.0 # В априорной модели токи LDO и USB-UART не учитываются (Г6)
 
@@ -124,10 +128,12 @@ mcu_configs:
         wakeup_time_ms: 2.0
         wakeup_energy_uj: 10.0
       power_down:
-        current_ma: 0.0002        # ~0.2 мкА при 3.3 В (0.1 мкА при 1.8 В)
+        # Периодическое пробуждение из power-down возможно только по сторожевому таймеру (WDT):
+        # 4.2 мкА при 3 В с включённым WDT [12]; без WDT (0.1 мкА) узел не проснётся по таймеру
+        current_ma: 0.0042
         wakeup_time_ms: 4.0
         wakeup_energy_uj: 20.0
-    wu_duration_base_ms: 20.0     # При базовой частоте 4 МГц
+    wu_duration_base_ms: 20.0     # Подготовка кадра при базовой частоте 4 МГц (без выхода из сна)
     pp_duration_base_ms: 8.0
     co_mcu_hibernation_ma: 0.005  # Ток гибернации соседнего чипа ESP32 на плате DXL-IoT (5 мкА)
     board_quiescent_current_ma: 0.0 # В априорной модели = 0 мА (Г6)

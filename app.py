@@ -26,27 +26,41 @@ st.set_page_config(
 ROOT_DIR = Path(__file__).resolve().parent
 
 
+CONFIG_PATHS = {
+    "apriori": ROOT_DIR / "config" / "apriori_params.yaml",
+    "calibrated": ROOT_DIR / "config" / "calibrated_params.yaml",
+}
+
+
 @st.cache_data
-def get_configs():
-    return {
-        "apriori": load_config(ROOT_DIR / "config" / "apriori_params.yaml"),
-        "calibrated": load_config(ROOT_DIR / "config" / "calibrated_params.yaml"),
-    }
+def get_configs(config_mtimes: tuple[float, ...]):
+    # config_mtimes входит в ключ кэша: при правке YAML-файлов конфиги перечитываются
+    return {name: load_config(path) for name, path in CONFIG_PATHS.items()}
 
 
-configs = get_configs()
+configs = get_configs(tuple(path.stat().st_mtime for path in CONFIG_PATHS.values()))
 
 # =====================================================================
 # БОКОВАЯ ПАНЕЛЬ УПРАВЛЕНИЯ ПАРАМЕТРАМИ
 # =====================================================================
 st.sidebar.title("⚙️ Параметры узла")
 
+calibrated_is_placeholder = configs["calibrated"].get("data_status") == "placeholder"
+calibrated_label = (
+    "Откалиброванная (шаблон, до измерений)" if calibrated_is_placeholder else "Откалиброванная (стенд DXL-IoT)"
+)
+
 model_choice = st.sidebar.radio(
     "Тип модели (Гипотеза Г6):",
     options=["calibrated", "apriori"],
-    format_func=lambda x: "Откалиброванная (стенд DXL-IoT)" if x == "calibrated" else "Априорная (по даташитам)",
+    format_func=lambda x: calibrated_label if x == "calibrated" else "Априорная (по даташитам)",
 )
 active_cfg = configs[model_choice]
+if model_choice == "calibrated" and calibrated_is_placeholder:
+    st.sidebar.warning(
+        "Параметры откалиброванной модели — условные значения до проведения серий С0–С8. "
+        "Не используйте их в отчёте как результаты измерений."
+    )
 
 mcu_choice = st.sidebar.selectbox(
     "Аппаратная конфигурация:",
@@ -471,14 +485,20 @@ with tabs[4]:
         pfe_res = run_pfe_2_3_experiment(active_cfg, tx_period_s=60.0)
         pfe_rows = []
         for term, val in pfe_res.coefficients.items():
-            pfe_rows.append({
-                "Коэффициент": term,
-                "Значение b_j": round(val, 4),
-                "Значим по Стьюденту (p < 0.05)": "✅ Да" if pfe_res.significant_terms[term] else "❌ Нет",
-            })
+            row = {"Коэффициент": term, "Значение b_j": round(val, 4)}
+            if pfe_res.significant_terms is not None:
+                row["Значим по Стьюденту (p < 0.05)"] = "✅ Да" if pfe_res.significant_terms[term] else "❌ Нет"
+            pfe_rows.append(row)
         st.dataframe(pd.DataFrame(pfe_rows), use_container_width=True, hide_index=True)
-        st.caption(
-            f"Критерий Кохрена $G_{{obs}} = {pfe_res.cochran_g_obs:.4f} \\le 0.5157$ "
-            f"(дисперсии однородны: **{'Да' if pfe_res.cochran_dispersions_uniform else 'Нет'}**). "
-            f"Порог Стьюдента $t_{{crit}} = {pfe_res.t_critical:.3f}$, $s_b = {pfe_res.coeff_std_error_sb:.5f}$."
-        )
+        if pfe_res.significant_terms is None:
+            st.caption(
+                "Коэффициенты рассчитаны по модели. Значимость (критерий Стьюдента) и однородность "
+                "дисперсий (критерий Кохрена) проверяются только по повторным измерениям серий С1, С2 и С6."
+            )
+        else:
+            st.caption(
+                f"Критерий Кохрена $G_{{obs}} = {pfe_res.cochran_g_obs:.4f}$, "
+                f"$G_{{crit}} = {pfe_res.cochran_g_critical:.4f}$ "
+                f"(дисперсии однородны: **{'Да' if pfe_res.cochran_dispersions_uniform else 'Нет'}**). "
+                f"Порог Стьюдента $t_{{crit}} = {pfe_res.t_critical:.3f}$, $s_b = {pfe_res.coeff_std_error_sb:.5f}$."
+            )

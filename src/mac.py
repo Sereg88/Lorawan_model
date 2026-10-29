@@ -26,7 +26,7 @@ class ClassBMetrics:
     """Параметры периодической активности класса B (формула 2.5)."""
     periodicity_k: int          # Параметр периодичности k in {0..7}
     slots_per_beacon: int       # Число ping-слотов за период маяка: 2^(7 - k)
-    ping_period_s: float        # Интервал между ping-слотами T_ping, с
+    ping_period_s: float        # Интервал между ping-слотами T_ping = 0,96 * 2^k, с
     beacon_period_s: float      # Период маяка T_b = 128 с
     q_beacon_mc: float          # Заряд на приём одного маяка Q_b, мКл
     q_ping_mc: float            # Заряд на один ping-слот Q_p, мКл
@@ -66,12 +66,15 @@ def calc_class_a_timings(
     lorawan_header_bytes: int = 13,
     n_sym_rx: int = 8,
     rx1_delay_ms: float = 1000.0,
-    rx2_delay_ms: float = 1000.0,
+    rx2_delay_ms: float = 2000.0,
     rx1_dr_offset: int = 0,
     rx2_sf: int = 12,
 ) -> ClassATimings:
     """
     Вычисляет длительности радиофаз цикла класса A (TX, WAIT_RX1, RX1, WAIT_RX2, RX2).
+    Задержки RECEIVE_DELAY1 (rx1_delay_ms) и RECEIVE_DELAY2 (rx2_delay_ms) отсчитываются
+    от конца передачи, поэтому пауза перед RX2 равна RECEIVE_DELAY2 - RECEIVE_DELAY1 - T_rx1
+    (ср. таблицу 1.3: «1000 - T_RX1»).
     Важное свойство для гипотезы Г1: длительность окна RX2 определяется rx2_sf=12 (DR0)
     и не зависит от SF восходящего сообщения.
     """
@@ -86,6 +89,11 @@ def calc_class_a_timings(
     sf_rx1 = get_rx1_sf(sf_tx, rx1_dr_offset)
     rx1_ms = calc_rx_window_duration_ms(sf=sf_rx1, n_sym=n_sym_rx, bw_khz=bw_khz)
     rx2_ms = calc_rx_window_duration_ms(sf=rx2_sf, n_sym=n_sym_rx, bw_khz=bw_khz)
+    wait_rx2_ms = rx2_delay_ms - rx1_delay_ms - rx1_ms
+    if wait_rx2_ms < 0:
+        raise ValueError(
+            f"Окно RX1 ({rx1_ms:.1f} мс) не укладывается между RECEIVE_DELAY1 и RECEIVE_DELAY2."
+        )
 
     return ClassATimings(
         sf_tx=sf_tx,
@@ -94,7 +102,7 @@ def calc_class_a_timings(
         tx_ms=tx_ms,
         wait_rx1_ms=rx1_delay_ms,
         rx1_ms=rx1_ms,
-        wait_rx2_ms=rx2_delay_ms,
+        wait_rx2_ms=wait_rx2_ms,
         rx2_ms=rx2_ms,
     )
 
@@ -104,6 +112,7 @@ def calc_class_b_current_addon(
     q_beacon_mc: float,
     q_ping_mc: float,
     beacon_period_s: float = 128.0,
+    beacon_window_s: float = 122.88,
 ) -> ClassBMetrics:
     """
     Формула (2.5): расчёт дополнительной составляющей среднего тока в классе B:
@@ -111,10 +120,12 @@ def calc_class_b_current_addon(
 
     Параметры:
         periodicity_k: Параметр периодичности ping-слотов k (0..7).
-                       При k=7 -> 1 слот за 128 с; k=4 -> 8 слотов (~16 с); k=1 -> 64 слота (~2 с).
+                       При k=7 -> 1 слот за период маяка; k=4 -> 8 слотов (15,36 с); k=1 -> 64 слота (1,92 с).
         q_beacon_mc: Суммарный заряд (радио + МК) на пробуждение и приём маяка Q_b, мКл.
         q_ping_mc: Суммарный заряд (радио + МК) на открытие одного ping-слота Q_p, мКл.
         beacon_period_s: Период следования маяков T_b = 128 с.
+        beacon_window_s: Окно ping-слотов внутри периода маяка (4096 слотов по 30 мс = 122,88 с),
+                         по нему считается интервал между ping-слотами 0,96 * 2^k с.
     """
     if not (0 <= periodicity_k <= 7):
         raise ValueError(f"Периодичность ping-слотов k должна быть в диапазоне 0..7, получено: {periodicity_k}")
@@ -122,7 +133,7 @@ def calc_class_b_current_addon(
         raise ValueError("Период маяка T_b должен быть положительным.")
 
     slots_per_beacon = 2 ** (7 - periodicity_k)
-    ping_period_s = beacon_period_s / slots_per_beacon
+    ping_period_s = beacon_window_s / slots_per_beacon
     # Так как Q в мКл (мА * с), деление на секунды сразу даёт ток в мА
     delta_i_ma = (q_beacon_mc + slots_per_beacon * q_ping_mc) / beacon_period_s
 
