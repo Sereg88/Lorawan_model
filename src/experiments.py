@@ -17,6 +17,191 @@ import pandas as pd
 from scipy import stats
 
 from src.node import evaluate_node_energy_budget
+from src.p2p import ENVELOPE_BYTES, P2PBridgeResult, evaluate_p2p_bridge
+from src.states import NodeState, PowerCircuit
+
+
+def p2p_result_tables(result: P2PBridgeResult) -> dict[str, pd.DataFrame]:
+    """Таблицы одного маршрута; энергии приведены к опорной шине с учётом КПД."""
+    forward = result.bridge_lorawan
+    sensor = pd.DataFrame([
+        {"state": p.name, "duration_ms": p.duration_ms, "radio_mj": p.radio_energy_mj,
+         "mcu_sensor_mj": p.mcu_energy_mj, "total_mj": p.energy_mj,
+         "equivalent_current_ma": 1000 * p.energy_mj / result.reference_voltage_v / p.duration_ms
+         if p.duration_ms else 0}
+        for p in result.sensor_phases
+    ])
+    bridge = pd.DataFrame([
+        {"component": "LoRaWAN + MCU", "energy_mj": forward.e_cycle_total_mj},
+        {"component": "E220 continuous RX", "energy_mj": result.bridge_p2p_rx_energy_mj},
+        {"component": "Bridge processing above sleep", "energy_mj": result.bridge_processing_energy_mj},
+    ])
+    # Профиль LoRaWAN показывает физические токи шин. Полный бюджет моста — выше:
+    # SENSOR отключён, события класса B и обработка не складываются как линейные фазы.
+    bridge_states = pd.DataFrame([
+        {"state": state.value, "duration_ms": circuits[PowerCircuit.RADIO].duration_ms,
+         "radio_current_ma": circuits[PowerCircuit.RADIO].current_ma,
+         "mcu_current_ma": circuits[PowerCircuit.MCU_BOARD].current_ma}
+        for state, circuits in forward.profile.states.items()
+    ])
+    links = pd.DataFrame([
+        {"link": "P2P uplink", "margin_db": result.p2p_margin_db},
+        {"link": "LoRaWAN uplink", "margin_db": forward.adr_info.link_margin_db},
+        {"link": "LoRaWAN RX1", "margin_db": forward.downlink_rx1_margin_db},
+        {"link": "LoRaWAN RX2", "margin_db": forward.downlink_rx2_margin_db},
+    ] + ([
+        {"link": "LoRaWAN beacon", "margin_db": forward.beacon_margin_db},
+        {"link": "LoRaWAN ping", "margin_db": forward.ping_slot_margin_db},
+    ] if forward.device_class == "B" else []))
+    summary = pd.DataFrame([{
+        "route_type": "lora_p2p_bridge", "channel": result.channel,
+        "frequency_hz": result.frequency_hz, "parameter_profile": result.parameter_profile,
+        "air_rate_bps": result.air_rate_bps, "tx_power_dbm": result.tx_power_dbm,
+        "airtime_ms": result.airtime_ms, "airtime_source": result.airtime_source,
+        "payload_bytes": result.payload_bytes, "forwarded_bytes": result.forwarded_bytes,
+        "forward_fport": result.forward_fport, "tx_period_s": result.tx_period_s,
+        "reference_voltage_v": result.reference_voltage_v,
+        "sensor_avg_ma": result.sensor_avg_current_ma,
+        "sensor_cycle_mj": result.sensor_cycle_energy_mj,
+        "sensor_lifetime_days": result.sensor_battery.lifetime_days,
+        "bridge_avg_ma": result.bridge_avg_current_ma,
+        "bridge_cycle_mj": result.bridge_cycle_energy_mj,
+        "bridge_lifetime_days": result.bridge_battery.lifetime_days,
+        "battery": result.sensor_battery.battery_key,
+        "bridge_radio": forward.radio_module, "bridge_plan": forward.band_plan,
+        "bridge_class": forward.device_class, "bridge_sf": forward.sf,
+        "bridge_tx_power_dbm": forward.tx_power_dbm,
+        "p2p_margin_db": result.p2p_margin_db,
+        "end_to_end_link_feasible": result.end_to_end_link_feasible,
+        "assumptions": " | ".join(result.warnings),
+    }])
+    return {"summary": summary, "sensor_phases": sensor, "bridge_energy": bridge,
+            "bridge_states": bridge_states, "link_margins": links}
+
+
+def compute_p2p_analysis(config: dict, parameters: dict, section: str) -> dict[str, pd.DataFrame]:
+    """Срезы модели P2P вокруг текущей точки, с отдельными откликами двух устройств.
+
+    Невместившиеся в период точки сохраняются с error и пустыми откликами.
+    Измерение TX относится только к выбранным payload/rate: их перебор отключён.
+    """
+    base = evaluate_p2p_bridge(config, **parameters)
+    sensor_mcu = parameters.get("mcu_config", "K1_ESP32")
+    bridge_mcu = parameters.get("bridge_mcu_config", "K1_ESP32")
+    deep = "deep_sleep" if sensor_mcu == "K1_ESP32" else "power_down"
+    shallow = "light_sleep" if sensor_mcu == "K1_ESP32" else "idle"
+    sensor_cpu = sorted(config["mcu_configs"][sensor_mcu]["active_current_by_freq_ma"])
+    bridge_cpu = sorted(config["mcu_configs"][bridge_mcu]["active_current_by_freq_ma"])
+
+    def point(labels, **overrides):
+        try:
+            r = evaluate_p2p_bridge(config, **{**parameters, **overrides})
+        except ValueError as err:
+            return {**labels, "error": str(err), "sensor_avg_ma": np.nan, "bridge_avg_ma": np.nan,
+                    "sensor_lifetime_days": np.nan, "bridge_lifetime_days": np.nan}
+        return {**labels, "error": "", "sensor_avg_ma": r.sensor_avg_current_ma,
+                "bridge_avg_ma": r.bridge_avg_current_ma,
+                "sensor_lifetime_days": r.sensor_battery.lifetime_days,
+                "bridge_lifetime_days": r.bridge_battery.lifetime_days,
+                "sensor_cycle_mj": r.sensor_cycle_energy_mj, "bridge_cycle_mj": r.bridge_cycle_energy_mj,
+                "airtime_ms": r.airtime_ms, "airtime_source": r.airtime_source,
+                "bridge_sf": r.bridge_lorawan.sf, "bridge_tx_power_dbm": r.bridge_lorawan.tx_power_dbm,
+                "bridge_transaction_mj": r.bridge_lorawan.e_tx_rx_cycle_mj,
+                "bridge_class_addon_ma": r.bridge_lorawan.delta_i_class_b_ma,
+                "bridge_toa_ms": r.bridge_lorawan.profile.states[NodeState.TX][PowerCircuit.RADIO].duration_ms,
+                "p2p_margin_db": r.p2p_margin_db,
+                "bridge_uplink_margin_db": r.bridge_lorawan.adr_info.link_margin_db,
+                "bridge_rx1_margin_db": r.bridge_lorawan.downlink_rx1_margin_db,
+                "bridge_rx2_margin_db": r.bridge_lorawan.downlink_rx2_margin_db,
+                "end_to_end_link_feasible": r.end_to_end_link_feasible,
+                "warnings": " | ".join(r.warnings)}
+
+    if section == "cycle":
+        tables = {"bridge_sf": pd.DataFrame([
+            point({"sf": sf}, bridge_sf=sf, bridge_adr_enabled=False) for sf in range(7, 13)
+        ])}
+        if parameters.get("measured_airtime_ms") is None:
+            tables["p2p_rate"] = pd.DataFrame([
+                point({"rate_bps": rate}, air_rate_bps=rate)
+                for rate in config["p2p_links"]["EBYTE"]["air_rate_levels_bps"]
+            ])
+        return tables
+    if section == "sleep":
+        periods = sorted(set(np.geomspace(60, 86400, 20).tolist() + [base.tx_period_s]))
+        return {"sleep_period": pd.DataFrame([
+            point({"period_min": period / 60, "sleep_mode": mode}, tx_period_s=period, sleep_mode=mode)
+            for mode in (deep, shallow) for period in periods
+        ])}
+    if section == "hardware":
+        return {
+            "sensor_cpu": pd.DataFrame([point({"cpu_mhz": f}, cpu_freq_mhz=f) for f in sensor_cpu]),
+            "bridge_wait_cpu": pd.DataFrame([
+                point({"cpu_mhz": f, "wait_mode": wait}, bridge_cpu_freq_mhz=f, bridge_wait_mode=wait)
+                for wait in ("light_sleep", "active") for f in bridge_cpu
+            ]),
+            "bridge_class": pd.DataFrame([
+                point({"class": label}, bridge_device_class=cls, bridge_ping_periodicity_k=k)
+                for label, cls, k in [("A", "A", None), ("B k=7", "B", 7), ("B k=4", "B", 4), ("B k=1", "B", 1)]
+            ]),
+        }
+    if section == "range":
+        p2p_distances = sorted(set(np.geomspace(.05, max(15, parameters.get("distance_km", .5)), 28).tolist()
+                                   + [parameters.get("distance_km", .5)]))
+        bridge_distances = sorted(set(np.geomspace(.05, max(15, parameters.get("bridge_distance_km", .5)), 28).tolist()
+                                      + [parameters.get("bridge_distance_km", .5)]))
+        return {
+            "p2p_distance": pd.DataFrame([point({"distance_km": d}, distance_km=d) for d in p2p_distances]),
+            "bridge_adr": pd.DataFrame([
+                point({"distance_km": d, "mode": label}, bridge_distance_km=d,
+                      bridge_adr_enabled=adr, bridge_sf=12)
+                for label, adr in [("SF12", False), ("ADR", True)] for d in bridge_distances
+            ]),
+        }
+    if section == "factors":
+        current_mode = parameters.get("sleep_mode") or deep
+        current_freq = parameters.get("cpu_freq_mhz") or config["mcu_configs"][sensor_mcu]["base_freq_mhz"]
+        candidates = [
+            ("Период передачи", base.tx_period_s, base.tx_period_s * 2, {"tx_period_s": base.tx_period_s * 2}),
+            ("Частота МК сенсора", current_freq, sensor_cpu[-1] if current_freq != sensor_cpu[-1] else sensor_cpu[0],
+             {"cpu_freq_mhz": sensor_cpu[-1] if current_freq != sensor_cpu[-1] else sensor_cpu[0]}),
+            ("Сон сенсора", current_mode, shallow if current_mode == deep else deep,
+             {"sleep_mode": shallow if current_mode == deep else deep}),
+            ("Класс моста", base.bridge_lorawan.device_class, "B" if base.bridge_lorawan.device_class == "A" else "A",
+             {"bridge_device_class": "B" if base.bridge_lorawan.device_class == "A" else "A", "bridge_ping_periodicity_k": 4}),
+            ("Ожидание RX моста", base.bridge_lorawan.wait_mode, "active" if base.bridge_lorawan.wait_mode == "light_sleep" else "light_sleep",
+             {"bridge_wait_mode": "active" if base.bridge_lorawan.wait_mode == "light_sleep" else "light_sleep"}),
+        ]
+        if parameters.get("measured_airtime_ms") is None:
+            limit = min(51, config["p2p_links"]["EBYTE"]["lorawan_forward_payload_limit_bytes"],
+                        config["p2p_links"]["EBYTE"]["subpacket_bytes"]) - ENVELOPE_BYTES
+            target = limit if base.payload_bytes != limit else 1
+            candidates.append(("Данные сенсора", base.payload_bytes, target, {"payload_bytes": target}))
+        rows = []
+        for name, before, after, overrides in candidates:
+            row = point({"factor": name, "base": str(before), "varied": str(after)}, **overrides)
+            row["sensor_lifetime_change_pct"] = 100 * (row["sensor_lifetime_days"] / base.sensor_battery.lifetime_days - 1)
+            row["bridge_lifetime_change_pct"] = 100 * (row["bridge_lifetime_days"] / base.bridge_battery.lifetime_days - 1)
+            rows.append(row)
+        # x1=период, x2=частота МК сенсора, x3=сон сенсора. Payload и rate фиксированы,
+        # поэтому одно измеренное время TX не переносится на другой формат пакета.
+        design = []
+        for x in PFE_2_3_DESIGN_MATRIX[:, 1:4]:
+            period = base.tx_period_s if x[0] < 0 else base.tx_period_s * 2
+            cpu = sensor_cpu[0] if x[1] < 0 else sensor_cpu[-1]
+            mode = deep if x[2] < 0 else shallow
+            design.append(point({"x1": x[0], "x2": x[1], "x3": x[2],
+                                 "period_s": period, "cpu_mhz": cpu, "sleep_mode": mode},
+                                tx_period_s=period, cpu_freq_mhz=cpu, sleep_mode=mode))
+        design_df = pd.DataFrame(design)
+        coeffs = []
+        if not design_df["error"].any():
+            sensor_fit = process_pfe_2_3(design_df["sensor_avg_ma"].to_numpy())
+            bridge_fit = process_pfe_2_3(design_df["bridge_avg_ma"].to_numpy())
+            coeffs = [{"term": term, "sensor_log10_i": sensor_fit.coefficients[term],
+                       "bridge_log10_i": bridge_fit.coefficients[term]} for term in PFE_TERM_NAMES]
+        return {"sensitivity": pd.DataFrame(rows), "pfe_design": design_df,
+                "pfe_coefficients": pd.DataFrame(coeffs, columns=["term", "sensor_log10_i", "bridge_log10_i"])}
+    raise ValueError(f"Неизвестный раздел анализа P2P: {section}")
 
 
 # Кодированная матрица полного факторного эксперимента 2^3 (Таблица 2.6 отчёта)
@@ -95,13 +280,15 @@ def calc_elasticity_formula_2_11(
 def compute_sensitivity_ranking(
     config: Dict[str, Any],
     tx_period_s: float = 60.0,
+    evaluation_overrides: Dict[str, Any] | None = None,
 ) -> List[SensitivityItem]:
     """
     Рассчитывает чувствительность срока службы ко всем основным факторам при заданном периоде T_tx (п. 2.8.1).
     Используется для построения диаграмм торнадо / чувствительности на коротких (1–5 мин)
     и длинных (60–1440 мин) периодах передачи для проверки гипотезы Г2.
     """
-    base_res = evaluate_node_energy_budget(config, tx_period_s=tx_period_s)
+    base_kwargs = dict(evaluation_overrides or {})
+    base_res = evaluate_node_energy_budget(config, tx_period_s=tx_period_s, **base_kwargs)
     t0 = base_res.battery.lifetime_years
     items: List[SensitivityItem] = []
 
@@ -110,11 +297,16 @@ def compute_sensitivity_ranking(
         ("SF", float(base_res.sf), 12.0, {"sf": 12}),
         ("payload_bytes", float(base_res.payload_bytes), 51.0, {"payload_bytes": 51}),
         ("sensor_freq_hz", float(base_res.sensor_freq_hz), 1.0, {"sensor_freq_hz": 1.0}),
-        ("cpu_freq_mhz", float(base_res.cpu_freq_mhz), 240.0, {"cpu_freq_mhz": 240.0}),
+        ("cpu_freq_mhz", float(base_res.cpu_freq_mhz),
+         float(max(config["mcu_configs"][base_res.mcu_config]["active_current_by_freq_ma"])),
+         {"cpu_freq_mhz": max(config["mcu_configs"][base_res.mcu_config]["active_current_by_freq_ma"])}),
     ]
 
     for name, x0, x1, kwargs in quant_variations:
-        var_res = evaluate_node_energy_budget(config, tx_period_s=tx_period_s, **kwargs)
+        if x0 == x1:
+            continue
+        merged_kwargs = {**base_kwargs, **kwargs}
+        var_res = evaluate_node_energy_budget(config, tx_period_s=tx_period_s, **merged_kwargs)
         t1 = var_res.battery.lifetime_years
         el = calc_elasticity_formula_2_11(t0, t1, x0, x1)
         items.append(
@@ -133,14 +325,17 @@ def compute_sensitivity_ranking(
     # 2. Качественные факторы: режим сна (deep_sleep -> light_sleep), ожидание (light_sleep -> active),
     # класс устройства (A -> B, k=4), саморазряд (ideal -> li_socl2_aa)
     qual_variations = [
-        ("sleep_mode", "deep_sleep", "light_sleep", {"sleep_mode": "light_sleep"}),
-        ("wait_mode", "light_sleep", "active", {"wait_mode": "active"}),
-        ("device_class", "A", "B(k=4)", {"device_class": "B", "ping_periodicity_k": 4}),
-        ("battery_type", "ideal", "li_socl2_aa", {"battery_type": "li_socl2_aa"}),
+        ("sleep_mode", base_res.sleep_mode,
+         "light_sleep" if base_res.mcu_config == "K1_ESP32" else "idle",
+         {"sleep_mode": "light_sleep" if base_res.mcu_config == "K1_ESP32" else "idle"}),
+        ("wait_mode", base_res.wait_mode, "active", {"wait_mode": "active"}),
+        ("device_class", base_res.device_class, "B(k=4)", {"device_class": "B", "ping_periodicity_k": 4}),
+        ("battery_type", base_res.battery_type, "li_socl2_aa", {"battery_type": "li_socl2_aa"}),
     ]
 
     for name, v0, v1, kwargs in qual_variations:
-        var_res = evaluate_node_energy_budget(config, tx_period_s=tx_period_s, **kwargs)
+        merged_kwargs = {**base_kwargs, **kwargs}
+        var_res = evaluate_node_energy_budget(config, tx_period_s=tx_period_s, **merged_kwargs)
         t1 = var_res.battery.lifetime_years
         rel = calc_elasticity_formula_2_11(t0, t1)
         items.append(
@@ -174,7 +369,11 @@ def cochran_critical_value(n_runs: int, n_repeats: int, alpha: float = 0.05) -> 
     return f_crit / (f_crit + n_runs - 1)
 
 
-def calc_pfe_model_points(config: Dict[str, Any], tx_period_s: float = 60.0) -> np.ndarray:
+def calc_pfe_model_points(
+    config: Dict[str, Any],
+    tx_period_s: float = 60.0,
+    evaluation_overrides: Dict[str, Any] | None = None,
+) -> np.ndarray:
     """
     Средний ток I_avg (мА) по модели в 8 точках плана Таблицы 2.6 (п. 2.8.3):
     - x1: SF (-1 -> SF7; +1 -> SF12)
@@ -182,10 +381,12 @@ def calc_pfe_model_points(config: Dict[str, Any], tx_period_s: float = 60.0) -> 
     - x3: Класс устройства (-1 -> Класс A; +1 -> Класс B, k = 4)
     """
     points = np.zeros(PFE_2_3_DESIGN_MATRIX.shape[0], dtype=float)
+    base_kwargs = dict(evaluation_overrides or {})
     for u, row in enumerate(PFE_2_3_DESIGN_MATRIX):
         x1, x2, x3 = row[1], row[2], row[3]
         res = evaluate_node_energy_budget(
             config,
+            **base_kwargs,
             sf=7 if x1 < 0 else 12,
             payload_bytes=12 if x2 < 0 else 51,
             device_class="A" if x3 < 0 else "B",
@@ -269,6 +470,7 @@ def run_pfe_2_3_experiment(
     config: Dict[str, Any],
     tx_period_s: float = 60.0,
     measured_i_avg_ma: Sequence[Sequence[float]] | np.ndarray | None = None,
+    evaluation_overrides: Dict[str, Any] | None = None,
 ) -> PfeRegressionResult:
     """
     Полный факторный эксперимент 2^3 по матрице Таблицы 2.6 (п. 2.8.3, формула 2.12).
@@ -277,7 +479,7 @@ def run_pfe_2_3_experiment(
     """
     if measured_i_avg_ma is not None:
         return process_pfe_2_3(measured_i_avg_ma)
-    return process_pfe_2_3(calc_pfe_model_points(config, tx_period_s))
+    return process_pfe_2_3(calc_pfe_model_points(config, tx_period_s, evaluation_overrides))
 
 
 def run_factorial_sweep(
@@ -294,6 +496,10 @@ def run_factorial_sweep(
     wait_mode_levels: Sequence[str] | None = None,
     drop_infeasible: bool = False,
     output_csv_path: str | Path | None = None,
+    radio_module: str | None = None,
+    band_plan: str | None = None,
+    receiver_sensitivity_dbm: float | None = None,
+    gateway_sensitivity_dbm: float | None = None,
 ) -> pd.DataFrame:
     """
     Пункт 2.8.1: выполняет полный факторный перебор заданных уровней Таблицы 2.1
@@ -341,12 +547,20 @@ def run_factorial_sweep(
             battery_type=str(bat),
             tx_period_s=float(t_min) * 60.0,
             wait_mode=str(wait),
+            radio_module=radio_module,
+            band_plan=band_plan,
+            receiver_sensitivity_dbm=receiver_sensitivity_dbm,
+            gateway_sensitivity_dbm=gateway_sensitivity_dbm,
         )
-        if drop_infeasible and not res.adr_info.link_feasible:
+        if drop_infeasible and not res.link_feasible:
             continue
         rows.append(
             {
                 "model_type": config.get("model_type", "unknown"),
+                "radio_module": res.radio_module,
+                "band_plan": res.band_plan,
+                "receiver_sensitivity_dbm": res.receiver_sensitivity_dbm,
+                "gateway_sensitivity_dbm": res.adr_info.receiver_sensitivity_dbm,
                 "sf_input": sf,
                 "sf_actual": res.sf,
                 "adr_enabled": adr,
@@ -368,7 +582,9 @@ def run_factorial_sweep(
                 "share_radio_pct": res.share_radio_pct,
                 "share_mcu_pct": res.share_mcu_board_pct,
                 "lifetime_years": res.battery.lifetime_years,
-                "link_feasible": res.adr_info.link_feasible,
+                "uplink_feasible": res.adr_info.link_feasible,
+                "downlink_feasible": res.downlink_feasible,
+                "link_feasible": res.link_feasible,
             }
         )
 

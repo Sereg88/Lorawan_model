@@ -5,15 +5,194 @@
 
 from pathlib import Path
 from typing import Any, Dict, List
+from io import BytesIO
+import json
 import zipfile
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
+import yaml
 
 from src.states import CLASS_A_ACTIVE_SEQUENCE, PowerCircuit
 from src.phy import calc_symbol_duration_ms, generate_table_2_4
 from src.node import evaluate_node_energy_budget
-from src.experiments import compute_sensitivity_ranking, run_pfe_2_3_experiment
+from src.experiments import (
+    compute_p2p_analysis, compute_sensitivity_ranking, p2p_result_tables, run_pfe_2_3_experiment,
+)
+from src.p2p import evaluate_p2p_bridge
+
+
+PLOT_SIZE = (6.2, 4.2)
+PLOT_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd")
+P2P_PLOT_LABELS = {
+    "radio_mj": "Радиомодуль", "mcu_sensor_mj": "МК и датчик",
+    "sensor_avg_ma": "Сенсор", "bridge_avg_ma": "Мост",
+    "sensor_lifetime_days": "Сенсор", "bridge_lifetime_days": "Мост",
+    "sensor_lifetime_change_pct": "Сенсор", "bridge_lifetime_change_pct": "Мост",
+    "sensor_log10_i": "Сенсор", "bridge_log10_i": "Мост",
+    "deep_sleep": "Глубокий сон", "power_down": "Power-down",
+    "light_sleep": "Light sleep / Idle", "idle": "Idle", "active": "Активное ожидание",
+    "bridge_toa_ms": "Время TX", "bridge_transaction_mj": "Энергия транзакции",
+    "p2p_margin_db": "Запас P2P", "energy_mj": "Энергия",
+    "ADR": "ADR вкл.", "SF12": "SF12 (без ADR)",
+    "LoRaWAN + MCU": "LoRaWAN + МК", "E220 continuous RX": "E220: непрерывный RX",
+    "Bridge processing above sleep": "Обработка контейнера",
+}
+
+
+def make_analysis_figure(
+    data: pd.DataFrame, *, title: str, xlabel: str, ylabel: str,
+    kind: str = "line", stacked: bool = False, log_x: bool = False,
+    colors: tuple[str, ...] | None = None, secondary_y: str | None = None,
+    secondary_ylabel: str | None = None,
+) -> Figure:
+    """Единое оформление Matplotlib для интерфейса E220 и его PNG/PDF-отчёта."""
+    fig = Figure(figsize=PLOT_SIZE)
+    ax = fig.subplots()
+    palette = colors or PLOT_COLORS
+    ax.set_prop_cycle(color=palette)
+    labels = [P2P_PLOT_LABELS.get(str(c), str(c)) for c in data.columns]
+    x = np.arange(len(data))
+    for i, column in enumerate(data):
+        values = data[column].to_numpy(dtype=float)
+        color = palette[i % len(palette)]
+        if colors is None:
+            color = {"ADR вкл.": "#1f77b4", "SF12 (без ADR)": "#d62728"}.get(labels[i].split(":")[0], color)
+        if kind in ("bar", "barh"):
+            width = .72 if stacked else .72 / max(1, len(data.columns))
+            offset = 0 if stacked else (i - (len(data.columns) - 1) / 2) * width
+            bottom = data.iloc[:, :i].sum(axis=1).to_numpy() if stacked else np.zeros(len(data))
+            bar_colors = ["#d62728" if value < 0 else "#2ca02c" for value in values] if kind == "barh" and len(data.columns) == 1 else color
+            if kind == "barh":
+                ax.barh(x + offset, values, height=width, left=bottom, color=bar_colors, label=labels[i])
+            else:
+                ax.bar(x + offset, values, width=width, bottom=bottom, color=bar_colors, label=labels[i])
+        else:
+            plot_ax = ax.twinx() if column == secondary_y else ax
+            if column == secondary_y:
+                plot_ax.set_ylabel(secondary_ylabel or labels[i], color=color)
+                plot_ax.tick_params(axis="y", labelcolor=color)
+            if kind == "step":
+                plot_ax.step(data.index, values, where="mid", color=color, linewidth=2, label=labels[i])
+            else:
+                plot_ax.plot(data.index, values, marker="o", markersize=3.5,
+                             linestyle="--" if i else "-", color=color, linewidth=2, label=labels[i])
+    if kind in ("bar", "barh"):
+        tick_labels = [P2P_PLOT_LABELS.get(str(v), str(v)) for v in data.index]
+        if kind == "barh":
+            ax.set_yticks(x, tick_labels)
+            ax.axvline(0, color="black", linewidth=.8)
+        else:
+            ax.set_xticks(x, tick_labels, rotation=12 if max(map(len, tick_labels), default=0) > 12 else 0)
+    if log_x:
+        ax.set_xscale("log")
+    ax.set(title=title, xlabel=xlabel, ylabel=ylabel)
+    if secondary_y:
+        ax.set_ylabel(ylabel, color=palette[0])
+        ax.tick_params(axis="y", labelcolor=palette[0])
+    ax.grid(axis="x" if kind == "barh" else "y" if kind == "bar" else "both",
+            which="both" if log_x else "major", linestyle="--", alpha=.5)
+    ax.set_axisbelow(True)
+    lines, legend_labels = [], []
+    for axis in fig.axes:
+        handles, names = axis.get_legend_handles_labels()
+        lines.extend(handles)
+        legend_labels.extend(names)
+        axis.tick_params(labelsize=9)
+    if len(data.columns) > 1 or secondary_y:
+        ax.legend(lines, legend_labels, fontsize=8.5)
+    fig.tight_layout()
+    return fig
+
+
+def export_p2p_report_bundle(config: dict, parameters: dict, comparison_configs: dict | None = None) -> bytes:
+    """Воспроизводимый отчёт P2P в памяти: параметры, исходный YAML, CSV, PNG/PDF."""
+    result = evaluate_p2p_bridge(config, **parameters)
+    tables = p2p_result_tables(result)
+    for section in ("cycle", "sleep", "hardware", "range", "factors"):
+        tables.update(compute_p2p_analysis(config, parameters, section))
+    comparison = []
+    for name, cfg in (comparison_configs or {}).items():
+        try:
+            row = p2p_result_tables(evaluate_p2p_bridge(cfg, **parameters))["summary"].iloc[0].to_dict()
+            comparison.append({"model": name, "data_status": cfg.get("data_status", "unspecified"), **row})
+        except ValueError as err:
+            comparison.append({"model": name, "error": str(err)})
+    if comparison:
+        tables["model_comparison"] = pd.DataFrame(comparison)
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("parameters.json", json.dumps(parameters, ensure_ascii=False, indent=2))
+        bundle.writestr("model_config.yaml", yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
+        for name, cfg in (comparison_configs or {}).items():
+            # Имена фиксированы приложением: apriori/calibrated.
+            if name in ("apriori", "calibrated"):
+                bundle.writestr(f"{name}_config.yaml", yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
+        for name, frame in tables.items():
+            bundle.writestr(f"tables/{name}.csv", frame.to_csv(index=False).encode("utf-8-sig"))
+        bundle.writestr("README.txt", (
+            "E220 P2P → прикладной мост → LoRaWAN. Аналитический расчёт, не измерение.\n"
+            f"data_status: {config.get('data_status', 'unspecified')}. "
+            "placeholder означает условные значения до калибровки.\n"
+            f"TX E220: {result.airtime_source}, {result.airtime_ms:.3f} мс.\n"
+            "Токи приведены к опорной шине; батареи сенсора и моста считаются отдельно.\n"
+            "CSV содержит ошибки недопустимых точек; они пропущены на графиках.\n"
+            "ПФЭ: x1=период (T, 2T), x2=частота МК сенсора (min, max), "
+            "x3=сон сенсора (deep/power_down, light/idle); y=lg(I_avg, мА).\n"
+            "Критерии значимости без повторных измерений не рассчитываются.\n\n"
+            + "\n".join(result.warnings)
+        ).encode("utf-8"))
+
+        def save_plot(name, frame, x, ys, xlabel, ylabel, *, group=None, bar=False, log_x=False,
+                      stacked=False, colors=None):
+            if frame.empty or any(c not in frame for c in [x, *ys]):
+                return
+            if group:
+                chart = frame.pivot(index=x, columns=group, values=ys)
+                chart.columns = [f"{P2P_PLOT_LABELS.get(str(label), label)}: {P2P_PLOT_LABELS.get(str(y), y)}"
+                                 for y, label in chart.columns]
+            else:
+                chart = frame.set_index(x)[ys]
+            fig = make_analysis_figure(chart, title="E220: " + ylabel, xlabel=xlabel, ylabel=ylabel,
+                                       kind="bar" if bar else "line", log_x=log_x, stacked=stacked, colors=colors)
+            try:
+                for extension in ("png", "pdf"):
+                    buffer = BytesIO()
+                    fig.savefig(buffer, format=extension, dpi=300, bbox_inches="tight")
+                    bundle.writestr(f"figures/{name}.{extension}", buffer.getvalue())
+            finally:
+                fig.clear()
+
+        save_plot("sensor_energy", tables["sensor_phases"], "state", ["radio_mj", "mcu_sensor_mj"],
+                  "Состояние сенсора", "Энергия, мДж", bar=True, stacked=True)
+        save_plot("bridge_energy", tables["bridge_energy"], "component", ["energy_mj"],
+                  "Составляющая моста", "Энергия, мДж", bar=True)
+        save_plot("sleep_period", tables["sleep_period"], "period_min",
+                  ["sensor_lifetime_days", "bridge_lifetime_days"], "Период, мин", "Срок работы, сут.",
+                  group="sleep_mode", log_x=True)
+        save_plot("bridge_sf", tables["bridge_sf"], "sf", ["bridge_transaction_mj"],
+                  "SF моста", "Энергия транзакции LoRaWAN, мДж")
+        save_plot("bridge_wait_cpu", tables["bridge_wait_cpu"], "cpu_mhz", ["bridge_avg_ma"],
+                  "Частота МК моста, МГц", "Средний ток моста, мА", group="wait_mode")
+        class_chart = tables["bridge_class"].copy()
+        class_chart["Базовый расход класса A"] = class_chart["bridge_avg_ma"] - class_chart["bridge_class_addon_ma"]
+        class_chart["Надбавка класса B"] = class_chart["bridge_class_addon_ma"]
+        save_plot("bridge_class", class_chart, "class", ["Базовый расход класса A", "Надбавка класса B"],
+                  "Класс LoRaWAN моста", "Средний ток моста, мА", bar=True, stacked=True,
+                  colors=("#2ca02c", "#d62728"))
+        save_plot("p2p_distance", tables["p2p_distance"], "distance_km", ["p2p_margin_db"],
+                  "Сенсор → мост, км", "Запас линии, дБ", log_x=True)
+        feasible_adr = tables["bridge_adr"].copy()
+        feasible_adr.loc[~feasible_adr["end_to_end_link_feasible"].fillna(False).astype(bool), "bridge_avg_ma"] = np.nan
+        save_plot("bridge_adr", feasible_adr, "distance_km", ["bridge_avg_ma"],
+                  "Мост → шлюз, км", "Средний ток моста, мА", group="mode", log_x=True)
+        save_plot("sensitivity", tables["sensitivity"], "factor",
+                  ["sensor_lifetime_change_pct", "bridge_lifetime_change_pct"], "Изменяемый фактор",
+                  "Изменение срока работы, %", bar=True)
+        save_plot("pfe", tables["pfe_coefficients"], "term", ["sensor_log10_i", "bridge_log10_i"],
+                  "Коэффициент ПФЭ", "y = lg(I_avg, мА)", bar=True)
+    return archive.getvalue()
 
 
 def _save_fig(fig: plt.Figure, figures_dir: Path, base_name: str, dpi: int = 300) -> List[Path]:
@@ -40,6 +219,15 @@ def export_full_report_bundle(
     и упаковывает их в единый архив `results/report_bundle.zip`.
     Возвращает путь к созданному ZIP-архиву.
     """
+    radio_context = {
+        key: current_params[key]
+        for key in ("radio_module", "band_plan", "receiver_sensitivity_dbm", "gateway_sensitivity_dbm")
+        if key in current_params
+    }
+
+    def evaluate_for_report(config, **overrides):
+        return evaluate_node_energy_budget(config, **{**radio_context, **overrides})
+
     out_root = Path(output_dir)
     tables_dir = out_root / "tables"
     figures_dir = out_root / "figures"
@@ -77,7 +265,29 @@ def export_full_report_bundle(
     # -----------------------------------------------------------------
     # 2. ПОФАЗОВЫЙ ПРОФИЛЬ ТЕКУЩЕЙ КОНФИГУРАЦИИ И ГРАФИК БЮДЖЕТА
     # -----------------------------------------------------------------
-    res_cur = evaluate_node_energy_budget(active_cfg, **current_params)
+    res_cur = evaluate_for_report(active_cfg, **current_params)
+    p_link = tables_dir / "current_link_budget.csv"
+    pd.DataFrame([{
+        "radio_module": res_cur.radio_module,
+        "band_plan": res_cur.band_plan,
+        "radio_supply_voltage_v": res_cur.radio_supply_voltage_v,
+        "reference_voltage_v": res_cur.profile.voltage_v,
+        "node_reference_sensitivity_dbm": res_cur.receiver_sensitivity_dbm,
+        "gateway_uplink_sensitivity_dbm": res_cur.adr_info.receiver_sensitivity_dbm,
+        "uplink_margin_db": res_cur.adr_info.link_margin_db,
+        "rx1_sensitivity_dbm": res_cur.rx1_sensitivity_dbm,
+        "rx2_sensitivity_dbm": res_cur.rx2_sensitivity_dbm,
+        "rx1_margin_db": res_cur.downlink_rx1_margin_db,
+        "rx2_margin_db": res_cur.downlink_rx2_margin_db,
+        "beacon_margin_db": res_cur.beacon_margin_db,
+        "ping_slot_margin_db": res_cur.ping_slot_margin_db,
+        "class_b_link_feasible": res_cur.class_b_link_feasible,
+        "uplink_feasible": res_cur.adr_info.link_feasible,
+        "downlink_feasible": res_cur.downlink_feasible,
+        "link_feasible": res_cur.link_feasible,
+        "assumptions": " | ".join(res_cur.model_warnings),
+    }]).to_csv(p_link, index=False, encoding="utf-8-sig")
+    generated_files.append(p_link)
     state_rows = []
     for st_enum in CLASS_A_ACTIVE_SEQUENCE:
         m_rad = res_cur.profile.states[st_enum][PowerCircuit.RADIO]
@@ -122,7 +332,7 @@ def export_full_report_bundle(
     sfs = [7, 8, 9, 10, 11, 12]
     g1_rows = []
     for s in sfs:
-        r_s = evaluate_node_energy_budget(
+        r_s = evaluate_for_report(
             active_cfg,
             sf=s,
             adr_enabled=False,
@@ -172,7 +382,7 @@ def export_full_report_bundle(
         ("SF7 + Неглубокий сон", {"sf": 7, "sleep_mode": shallow_key}),
     ]:
         vals = [
-            evaluate_node_energy_budget(
+            evaluate_for_report(
                 active_cfg,
                 adr_enabled=False,
                 payload_bytes=current_params["payload_bytes"],
@@ -204,7 +414,7 @@ def export_full_report_bundle(
     ]
     i_base_list, i_addon_list = [], []
     for _, cl, k_item in modes_b:
-        r_b = evaluate_node_energy_budget(
+        r_b = evaluate_for_report(
             active_cfg,
             sf=current_params["sf"],
             device_class=cl,
@@ -230,8 +440,8 @@ def export_full_report_bundle(
     dists = active_cfg["experiment_grid"]["factors"]["distance_km_levels"]
     g4_rows = []
     for d in dists:
-        r_on = evaluate_node_energy_budget(active_cfg, adr_enabled=True, distance_km=d, payload_bytes=current_params["payload_bytes"])
-        r_off = evaluate_node_energy_budget(active_cfg, adr_enabled=False, sf=12, distance_km=d, payload_bytes=current_params["payload_bytes"])
+        r_on = evaluate_for_report(active_cfg, adr_enabled=True, distance_km=d, payload_bytes=current_params["payload_bytes"])
+        r_off = evaluate_for_report(active_cfg, adr_enabled=False, sf=12, distance_km=d, payload_bytes=current_params["payload_bytes"])
         g4_rows.append({
             "Distance_km": d,
             "SNR_dB": round(r_on.adr_info.snr_db, 2),
@@ -266,11 +476,11 @@ def export_full_report_bundle(
     # -----------------------------------------------------------------
     freqs = [80, 160, 240] if mcu_choice == "K1_ESP32" else [2, 4, 8]
     e_light = [
-        evaluate_node_energy_budget(active_cfg, mcu_config=mcu_choice, cpu_freq_mhz=f, wait_mode="light_sleep", sf=current_params["sf"]).e_tx_rx_cycle_mj
+        evaluate_for_report(active_cfg, mcu_config=mcu_choice, cpu_freq_mhz=f, wait_mode="light_sleep", sf=current_params["sf"]).e_tx_rx_cycle_mj
         for f in freqs
     ]
     e_active = [
-        evaluate_node_energy_budget(active_cfg, mcu_config=mcu_choice, cpu_freq_mhz=f, wait_mode="active", sf=current_params["sf"]).e_tx_rx_cycle_mj
+        evaluate_for_report(active_cfg, mcu_config=mcu_choice, cpu_freq_mhz=f, wait_mode="active", sf=current_params["sf"]).e_tx_rx_cycle_mj
         for f in freqs
     ]
     fig_g5, ax_g5 = plt.subplots(figsize=(6.8, 4.2))
@@ -289,8 +499,8 @@ def export_full_report_bundle(
     # -----------------------------------------------------------------
     # 8. ГИПОТЕЗА Г6: Сравнение априорной и откалиброванной моделей
     # -----------------------------------------------------------------
-    r_apr = evaluate_node_energy_budget(apriori_cfg, **current_params)
-    r_cal = evaluate_node_energy_budget(calibrated_cfg, **current_params)
+    r_apr = evaluate_for_report(apriori_cfg, **current_params)
+    r_cal = evaluate_for_report(calibrated_cfg, **current_params)
     df_g6 = pd.DataFrame([
         {"Показатель": "Ток сна узла, мкА", "Априорная": round(r_apr.i_sleep_total_ua, 2), "Откалиброванная": round(r_cal.i_sleep_total_ua, 2)},
         {"Показатель": "Энергия транзакции E_ц, мДж", "Априорная": round(r_apr.e_tx_rx_cycle_mj, 2), "Откалиброванная": round(r_cal.e_tx_rx_cycle_mj, 2)},
@@ -304,8 +514,8 @@ def export_full_report_bundle(
     # -----------------------------------------------------------------
     # 9. ЧУВСТВИТЕЛЬНОСТЬ (ф. 2.11: 1 мин vs 360 мин) И ПФЭ 2^3 (Таблица 2.6)
     # -----------------------------------------------------------------
-    sens_short = compute_sensitivity_ranking(active_cfg, tx_period_s=60.0)
-    sens_long = compute_sensitivity_ranking(active_cfg, tx_period_s=360.0 * 60.0)
+    sens_short = compute_sensitivity_ranking(active_cfg, tx_period_s=60.0, evaluation_overrides=radio_context)
+    sens_long = compute_sensitivity_ranking(active_cfg, tx_period_s=360.0 * 60.0, evaluation_overrides=radio_context)
 
     fig_sens, (ax_s1, ax_s2) = plt.subplots(1, 2, figsize=(12.5, 4.5))
     for ax_s, s_list, title_str in [
@@ -322,7 +532,7 @@ def export_full_report_bundle(
         ax_s.grid(axis="x", linestyle="--", alpha=0.5)
     generated_files.extend(_save_fig(fig_sens, figures_dir, "fig_7_sensitivity_short_vs_long"))
 
-    pfe = run_pfe_2_3_experiment(active_cfg, tx_period_s=60.0)
+    pfe = run_pfe_2_3_experiment(active_cfg, tx_period_s=60.0, evaluation_overrides=radio_context)
     df_pfe = pd.DataFrame([
         {
             "Коэффициент": k,

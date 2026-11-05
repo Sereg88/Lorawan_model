@@ -49,30 +49,313 @@ channel_adr:
     11: -17.5
     12: -20.0
 
+band_plans:
+  EU433:
+    label: EU433 (433.175 MHz)
+    system:
+      supply_voltage_v: 3.3
+      region: EU433
+      frequency_hz: 433175000
+      bandwidth_khz: 125
+      coding_rate: 1
+      preamble_symbols: 8
+      lorawan_header_bytes: 13
+      explicit_header: true
+      crc_enabled: true
+      rx1_delay_ms: 1002.5
+      rx2_delay_ms: 2001.8
+      rx1_dr_offset: 0
+      rx2_sf: 12
+      rx_window_symbols: 10
+      default_uplink_channels_hz:
+      - 433175000
+      - 433375000
+      - 433575000
+      rx2_frequency_hz: 434665000
+      max_eirp_dbm: 12
+      duty_cycle_limit: 0.1
+      uplink_dwell_time_ms: 0
+      regional_parameters_source: RP002-1.0.5, dynamic channel plans; LoRa SF7-SF12/BW125
+        subset
+    class_b:
+      beacon_period_s: 128.0
+      beacon_window_s: 122.88
+      beacon_sf: 9
+      beacon_rx_duration_ms: 175.0
+      ping_slot_duration_ms: 32.5
+      beacon_frequency_hz: 434665000
+      ping_slot_frequency_hz: 434665000
+      ping_slot_sf: 9
+    channel_adr:
+      tx_power_dbm: 10.0
+      min_tx_power_dbm: 2.0
+      tx_power_step_db: 2.0
+      antenna_gain_db: 0.0
+      ref_distance_km: 0.05
+      ref_loss_db: 72.4
+      path_loss_exponent: 2.95
+      thermal_noise_dbm: -174.0
+      gateway_noise_figure_db: 6.0
+      adr_margin_db: 10.0
+      snr_thresholds_db:
+        7: -7.5
+        8: -10.0
+        9: -12.5
+        10: -15.0
+        11: -17.5
+        12: -20.0
+      tx_antenna_gain_dbi: 0.0
+      gateway_tx_power_dbm: 12
+      gateway_sensitivity_dbm: null
+      gateway_sensitivity_reference_sf: 12
+      gateway_sensitivity_reference_bandwidth_khz: 125
+      path_loss_reference_frequency_hz: 433175000
+  EU868:
+    label: EU868 (868.1 MHz)
+    system:
+      supply_voltage_v: 3.3
+      region: EU868
+      frequency_hz: 868100000
+      bandwidth_khz: 125
+      coding_rate: 1
+      preamble_symbols: 8
+      lorawan_header_bytes: 13
+      explicit_header: true
+      crc_enabled: true
+      rx1_delay_ms: 1002.5
+      rx2_delay_ms: 2001.8
+      rx1_dr_offset: 0
+      rx2_sf: 12
+      rx_window_symbols: 10
+      default_uplink_channels_hz:
+      - 868100000
+      - 868300000
+      - 868500000
+      rx2_frequency_hz: 869525000
+      max_eirp_dbm: 16
+      duty_cycle_limit: 0.01
+      uplink_dwell_time_ms: 0
+      regional_parameters_source: RP002-1.0.5, dynamic channel plans; LoRa SF7-SF12/BW125
+        subset
+    class_b:
+      beacon_period_s: 128.0
+      beacon_window_s: 122.88
+      beacon_sf: 9
+      beacon_rx_duration_ms: 175.0
+      ping_slot_duration_ms: 32.5
+      beacon_frequency_hz: 869525000
+      ping_slot_frequency_hz: 869525000
+      ping_slot_sf: 9
+    channel_adr:
+      tx_power_dbm: 10.0
+      min_tx_power_dbm: 2.0
+      tx_power_step_db: 2.0
+      antenna_gain_db: 0.0
+      ref_distance_km: 0.05
+      ref_loss_db: 72.4
+      path_loss_exponent: 2.95
+      thermal_noise_dbm: -174.0
+      gateway_noise_figure_db: 6.0
+      adr_margin_db: 10.0
+      snr_thresholds_db:
+        7: -7.5
+        8: -10.0
+        9: -12.5
+        10: -15.0
+        11: -17.5
+        12: -20.0
+      tx_antenna_gain_dbi: 0.0
+      gateway_tx_power_dbm: 14.0
+      gateway_sensitivity_dbm: null
+      gateway_sensitivity_reference_sf: 12
+      gateway_sensitivity_reference_bandwidth_khz: 125
+      path_loss_reference_frequency_hz: 433175000
+  AS923:
+    label: AS923-1 (923.2 MHz)
+    system:
+      supply_voltage_v: 3.3
+      region: AS923-1
+      frequency_hz: 923200000
+      bandwidth_khz: 125
+      coding_rate: 1
+      preamble_symbols: 8
+      lorawan_header_bytes: 13
+      explicit_header: true
+      crc_enabled: true
+      rx1_delay_ms: 1002.5
+      rx2_delay_ms: 2001.8
+      rx1_dr_offset: 0
+      rx2_sf: 10
+      rx_window_symbols: 10
+      default_uplink_channels_hz:
+      - 923200000
+      - 923400000
+      rx2_frequency_hz: 923200000
+      max_eirp_dbm: 16
+      duty_cycle_limit: null
+      uplink_dwell_time_ms: 0
+      regional_parameters_source: RP002-1.0.5, dynamic channel plans; LoRa SF7-SF12/BW125
+        subset
+      scenario_note: Подплан AS923-1, dwell=0. Настройки конкретной сети/страны задаются
+        отдельно; US915/AU915 не реализованы.
+    class_b:
+      beacon_period_s: 128.0
+      beacon_window_s: 122.88
+      beacon_sf: 9
+      beacon_rx_duration_ms: 175.0
+      ping_slot_duration_ms: 32.5
+      beacon_frequency_hz: 923400000
+      ping_slot_frequency_hz: 923400000
+      ping_slot_sf: 9
+    channel_adr:
+      tx_power_dbm: 10.0
+      min_tx_power_dbm: 2.0
+      tx_power_step_db: 2.0
+      antenna_gain_db: 0.0
+      ref_distance_km: 0.05
+      ref_loss_db: 72.4
+      path_loss_exponent: 2.95
+      thermal_noise_dbm: -174.0
+      gateway_noise_figure_db: 6.0
+      adr_margin_db: 10.0
+      snr_thresholds_db:
+        7: -7.5
+        8: -10.0
+        9: -12.5
+        10: -15.0
+        11: -17.5
+        12: -20.0
+      tx_antenna_gain_dbi: 0.0
+      gateway_tx_power_dbm: 14.0
+      gateway_sensitivity_dbm: null
+      gateway_sensitivity_reference_sf: 12
+      gateway_sensitivity_reference_bandwidth_khz: 125
+      path_loss_reference_frequency_hz: 433175000
+
 radio_modules:
+  DXLR03900:
+    model_name: DX-LR03-900T30D
+    chipset: ASR6601
+    interface: LPUART
+    datasheet: 'Datashits/DX-LR03-900T30D Module technical manual.pdf, pp. 9, 13, 15, 25'
+    frequency_range_mhz: [850, 931]
+    supported_band_plans: [EU868, AS923]
+    lorawan_support: requires_custom_firmware
+    supply_voltage_range_v: [4.0, 5.5]
+    supply_voltage_v: 5.0
+    # КПД преобразования к опорному питанию узла: идеальное допущение до измерений.
+    power_conversion_efficiency: 1.0
+    sleep_current_ma: 2.61
+    idle_current_ma: 6.75          # Air wake-up / Standby, не глубокий сон
+    standby_current_ma: 22.28     # High time mode / Standby
+    rx_current_ma: 26.42          # High time mode / Receive
+    wor_rx_current_ma: 48.71      # Air wake-up / Receive (отдельный режим)
+    tx_current_by_p_dbm: {28: 179.0}
+    tx_current_model: constant_estimate
+    min_tx_power_dbm: 0
+    max_tx_power_dbm: 28
+    sensitivity_dbm: -125
+    sensitivity_reference_sf: 7
+    sensitivity_reference_bandwidth_khz: 125
+    sensitivity_conditions: 'Паспорт: SF7/BW125; остальные SF оценены при постоянном NF.'
+    temperature_range_c: [-40, 85]
   DRF1278F:
-    sleep_current_ma: 0.0012      # Заглушка (измерить мультиметром в серии С3)
-    idle_current_ma: 0.0025
-    standby_current_ma: 1.75
-    rx_current_ma: 11.8           # Заглушка (измерить в серии С1)
-    tx_current_by_p_dbm:
-      7: 21.5
-      10: 28.4                    # Заглушка (измерить в серии С1)
-      13: 32.0
-      17: 91.0
-      20: 124.0
+    model_name: DRF1278F
+    chipset: SX1278
+    interface: SPI
+    datasheet: 'Datashits/DRF1278F.pdf, p. 3, Table 2'
+    frequency_range_mhz: [410, 460]
+    supported_band_plans: [EU433]
+    lorawan_support: external_stack
+    supply_voltage_range_v: [1.8, 3.6]
+    supply_voltage_v: 3.3
+    power_conversion_efficiency: 1.0
+    sleep_current_ma: 0.001       # Паспортный максимум 1 мкА, типовое значение не приведено
+    sleep_current_kind: maximum
+    idle_current_ma: 0.0015       # Оценка по SX1278, не значение из Table 2
+    standby_current_ma: 1.6       # Оценка по SX1278, уточнить измерениями
+    rx_current_ma: 12.0           # Типовое значение из Table 2
+    tx_current_by_p_dbm:          # Только точка +20 дБм паспортная; прочие — прежние оценки по SX1278
+      2: 20.0                    # Консервативная оценка до измерения малых мощностей
+      7: 20.0
+      10: 24.5
+      13: 29.0
+      17: 87.0
+      20: 120.0
+    tx_current_model: interpolated_estimate
+    tx_current_max_ma: 125.0
+    min_tx_power_dbm: 2            # Нижний предел принят в модели, в PDF не приведён
+    max_tx_power_dbm: 20
+    sensitivity_dbm: -136         # Table 2; не рекламные -139 дБм с первой страницы
+    sensitivity_reference_sf: 12  # Допущение: 300 бит/с ≈ SF12/BW125/CR4:5
+    sensitivity_reference_bandwidth_khz: 125
+    sensitivity_conditions: 'Паспорт: LoRa 300 бит/с. Соответствие SF12/BW125 принято как допущение; таблицы по SF в PDF нет.'
+    temperature_range_c: [-40, 80]
   EBYTE:
-    # Заглушка: отличие от DRF1278F из-за внешней обвязки модуля ожидается по [5], проверяется в серии С1
-    sleep_current_ma: 0.0045      # Заглушка
-    idle_current_ma: 0.0060
-    standby_current_ma: 2.10
-    rx_current_ma: 14.2
-    tx_current_by_p_dbm:
-      7: 35.0
-      10: 46.8                    # Заглушка
-      13: 54.0
-      17: 110.0
-      20: 138.0
+    model_name: E220-400T22D
+    chipset: LLCC68
+    interface: UART
+    datasheet: 'Datashits/E220-400T22D_UserManual_EN_v1.0.pdf, pp. 4-5, 15-16'
+    frequency_range_mhz: [410.125, 493.125]
+    channel_base_hz: 410125000
+    channel_step_hz: 1000000
+    channel_count: 84
+    default_frequency_hz: 433125000
+    supported_band_plans: []
+    lorawan_support: unsupported_stock_firmware
+    compatibility_note: 'E220-400T22D: штатная прошивка предоставляет LoRa P2P через UART, без прямой интеграции со стеком LoRaWAN. Сетка 410.125 + CH×1 МГц не содержит обязательных каналов EU433; LLCC68 при BW125 поддерживает SF7–SF9, но не RX2 SF12. Нужен отдельный P2P-расчёт или другое оборудование/прошивка.'
+    sf_by_bandwidth_khz: {125: [7, 8, 9], 250: [7, 8, 9, 10], 500: [7, 8, 9, 10, 11]}
+    supply_voltage_range_v: [3.0, 5.5]
+    supply_voltage_v: 5.0
+    power_conversion_efficiency: 1.0
+    sleep_current_ma: 0.005
+    idle_current_ma: null         # Отдельный idle-ток в PDF не указан
+    standby_current_ma: null      # Не подставляем ток SX1278 вместо данных E220
+    rx_current_ma: 16.8
+    tx_current_by_p_dbm: {22: 110.0}
+    tx_current_model: constant_estimate
+    tx_current_note: 'Table 2-2: 110 мА, но примечание ошибочно указывает @30 dBm при максимуме модуля 22 dBm. Точка требует проверки; не считать кривой I(P).'
+    tx_power_levels_dbm: [10, 13, 17, 22]
+    min_tx_power_dbm: 10
+    max_tx_power_dbm: 22
+    sensitivity_dbm: -127
+    sensitivity_reference_sf: null
+    sensitivity_reference_bandwidth_khz: null
+    sensitivity_conditions: 'Карточка EBYTE: -127 дБм при 2.4 кбит/с; -147 дБм старого PDF ошибочны. SF/BW для этого режима не установлены.'
+    temperature_range_c: [-40, 85]
+
+
+# E220 — отдельный канал P2P. Штатная совместимость с LoRaWAN не подразумевается.
+p2p_links:
+  EBYTE:
+    parameter_profile: legacy
+    forward_fport: 20
+    parameter_profiles:
+      legacy:
+        # Токи из старого руководства; ошибочные -147 дБм заменены данными карточки EBYTE.
+        rx_current_ma: 16.8
+        sleep_current_ma: 0.005
+        tx_current_ma: 110.0
+        sensitivity_dbm: -127.0
+      v1_7:
+        supply_voltage_range_v: [2.6, 5.5]
+        # Общее руководство E220-T v1.7, стр. 7–8, 5 В/25 °C. Соответствие ревизии платы нужно проверить.
+        rx_current_ma: 8.0
+        sleep_current_ma: 0.003
+        tx_current_ma: 110.0  # Верхняя точка диапазона 90–110 мА при +22 дБм
+        sensitivity_dbm: -126.0
+    air_rate_levels_bps: [2400, 4800, 9600, 19200, 38400, 62500]
+    uart_baud_bps: 9600
+    uart_flush_ms: 5.0          # Допущение до измерений таймингов AUX/UART
+    subpacket_bytes: 200
+    lorawan_forward_payload_limit_bytes: 51  # Консервативный предел для всех моделируемых SF
+    bridge_processing_ms: 10.0 # Допущение: дополнительная обработка вне LoRaWAN-транзакции
+    channel:
+      antenna_gain_db: 0.0
+      ref_distance_km: 0.05
+      ref_loss_db: 70.0
+      reference_frequency_hz: 433125000
+      path_loss_exponent: 2.8
 
 mcu_configs:
   K1_ESP32:
@@ -168,6 +451,7 @@ experiment_grid:
     battery_type: "ideal"
     tx_period_s: 60.0
     radio_module: "DRF1278F"
+    band_plan: "EU433"
 
   factors:
     sf_levels: [7, 8, 9, 10, 11, 12]

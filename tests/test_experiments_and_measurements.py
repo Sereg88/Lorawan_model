@@ -19,13 +19,95 @@ from src.experiments import (
     process_pfe_2_3,
     run_pfe_2_3_experiment,
     run_factorial_sweep,
+    compute_p2p_analysis,
+    p2p_result_tables,
 )
+from src.p2p import evaluate_p2p_bridge
 
 
 @pytest.fixture(scope="module")
 def calibrated_cfg():
     root = Path(__file__).resolve().parent.parent
     return load_config(root / "config" / "calibrated_params.yaml")
+
+
+def test_p2p_tables_preserve_two_device_energy_balances(calibrated_cfg):
+    result = evaluate_p2p_bridge(calibrated_cfg, bridge_device_class="B")
+    tables = p2p_result_tables(result)
+    assert tables["sensor_phases"]["total_mj"].sum() == pytest.approx(result.sensor_cycle_energy_mj)
+    assert tables["bridge_energy"]["energy_mj"].sum() == pytest.approx(result.bridge_cycle_energy_mj)
+    assert tables["sensor_phases"]["duration_ms"].sum() == pytest.approx(result.tx_period_s * 1000)
+    assert len(tables["link_margins"]) == 6  # P2P, uplink, RX1/RX2, beacon/ping
+    assert tables["summary"].iloc[0]["bridge_class"] == "B"
+
+
+def test_p2p_slices_use_current_point_and_keep_sensor_independent(calibrated_cfg):
+    params = dict(tx_period_s=735, mcu_config="K2_ATMEGA", cpu_freq_mhz=8,
+                  sleep_mode="idle", payload_bytes=30, bridge_device_class="B",
+                  bridge_ping_periodicity_k=7, bridge_sf=10)
+    base = evaluate_p2p_bridge(calibrated_cfg, **params)
+    cycle = compute_p2p_analysis(calibrated_cfg, params, "cycle")
+    assert cycle["bridge_sf"]["sensor_avg_ma"].to_numpy() == pytest.approx(base.sensor_avg_current_ma)
+    selected = cycle["bridge_sf"].set_index("sf").loc[10]
+    assert selected["bridge_avg_ma"] == pytest.approx(base.bridge_avg_current_ma)
+    sleep = compute_p2p_analysis(calibrated_cfg, params, "sleep")["sleep_period"]
+    selected = sleep[(sleep["period_min"] == 735 / 60) & (sleep["sleep_mode"] == "idle")].iloc[0]
+    assert selected["sensor_avg_ma"] == pytest.approx(base.sensor_avg_current_ma)
+    hardware = compute_p2p_analysis(calibrated_cfg, params, "hardware")
+    assert hardware["bridge_class"]["sensor_avg_ma"].to_numpy() == pytest.approx(base.sensor_avg_current_ma)
+    assert hardware["sensor_cpu"].set_index("cpu_mhz").loc[8, "sensor_avg_ma"] == pytest.approx(base.sensor_avg_current_ma)
+    distance = compute_p2p_analysis(calibrated_cfg, params, "range")["p2p_distance"]
+    assert distance["sensor_avg_ma"].to_numpy() == pytest.approx(base.sensor_avg_current_ma)
+    assert distance.iloc[-1]["p2p_margin_db"] < distance.iloc[0]["p2p_margin_db"]
+
+
+def test_p2p_measured_airtime_is_not_extrapolated_to_other_packets(calibrated_cfg):
+    params = dict(measured_airtime_ms=178, payload_bytes=31, air_rate_bps=4800)
+    assert "p2p_rate" not in compute_p2p_analysis(calibrated_cfg, params, "cycle")
+    factors = compute_p2p_analysis(calibrated_cfg, params, "factors")
+    assert "Данные сенсора" not in set(factors["sensitivity"]["factor"])
+    assert factors["pfe_design"]["airtime_ms"].to_numpy() == pytest.approx(178)
+    assert set(factors["pfe_design"]["airtime_source"]) == {"measured"}
+    # Проверяем восстановление всех восьми расчётных откликов по коэффициентам.
+    coeffs = factors["pfe_coefficients"].set_index("term")
+    for device in ("sensor", "bridge"):
+        predicted = PFE_2_3_DESIGN_MATRIX @ coeffs[f"{device}_log10_i"].to_numpy()
+        assert predicted == pytest.approx(np.log10(factors["pfe_design"][f"{device}_avg_ma"]))
+
+
+def test_p2p_sweep_retains_invalid_periods(calibrated_cfg):
+    params = dict(measured_airtime_ms=70000, tx_period_s=100)
+    sleep = compute_p2p_analysis(calibrated_cfg, params, "sleep")["sleep_period"]
+    invalid = sleep[sleep["error"] != ""]
+    valid = sleep[sleep["error"] == ""]
+    assert not invalid.empty and not valid.empty
+    assert invalid["sensor_avg_ma"].isna().all()
+    assert (valid["sensor_avg_ma"] > 0).all()
+
+
+def test_p2p_report_contains_reproducible_inputs_tables_and_figures(calibrated_cfg):
+    from io import BytesIO
+    import json
+    import zipfile
+    import pandas as pd
+    import yaml
+    from src.report_export import export_p2p_report_bundle
+    params = dict(measured_airtime_ms=150, tx_period_s=740, payload_bytes=23,
+                  bridge_device_class="B", bridge_adr_enabled=True)
+    archive_bytes = export_p2p_report_bundle(calibrated_cfg, params, {"calibrated": calibrated_cfg})
+    with zipfile.ZipFile(BytesIO(archive_bytes)) as archive:
+        assert archive.testzip() is None
+        assert json.loads(archive.read("parameters.json")) == params
+        assert yaml.safe_load(archive.read("model_config.yaml")) == calibrated_cfg
+        summary = pd.read_csv(BytesIO(archive.read("tables/summary.csv")))
+        expected = evaluate_p2p_bridge(calibrated_cfg, **params)
+        assert summary.iloc[0]["sensor_avg_ma"] == pytest.approx(expected.sensor_avg_current_ma)
+        assert summary.iloc[0]["bridge_avg_ma"] == pytest.approx(expected.bridge_avg_current_ma)
+        assert "tables/p2p_rate.csv" not in archive.namelist()
+        assert "tables/pfe_coefficients.csv" in archive.namelist()
+        assert "placeholder" in archive.read("README.txt").decode("utf-8")
+        assert archive.read("figures/sleep_period.pdf").startswith(b"%PDF-")
+        assert archive.read("figures/sensor_energy.png").startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_trapezoid_integration_series_c0_calibration() -> None:

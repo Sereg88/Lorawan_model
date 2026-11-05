@@ -44,6 +44,9 @@ class AdrConvergenceResult:
     snr_margin_db: float
     n_steps: int
     link_feasible: bool
+    rssi_dbm: float
+    receiver_sensitivity_dbm: float
+    link_margin_db: float
 
 
 def calc_noise_floor_dbm(
@@ -113,6 +116,7 @@ def resolve_adr(
     gateway_noise_figure_db: float = 6.0,
     adr_margin_db: float = 10.0,
     snr_thresholds_db: Dict[int, float] = DEFAULT_SNR_THRESHOLDS_DB,
+    receiver_sensitivity_by_sf_dbm: Dict[int, float] | None = None,
 ) -> AdrConvergenceResult:
     """
     Формула (2.7): моделирование алгоритма ADR.
@@ -135,9 +139,19 @@ def resolve_adr(
         snr_thresholds_db=snr_thresholds_db,
     )
 
+    # Это приёмник шлюза (uplink), а не чувствительность радиомодуля узла.
+    thresholds = (
+        {sf: lb.noise_floor_dbm + snr for sf, snr in snr_thresholds_db.items()}
+        if receiver_sensitivity_by_sf_dbm is None else receiver_sensitivity_by_sf_dbm
+    )
+    if any(sf not in thresholds or not math.isfinite(thresholds[sf]) for sf in range(7, 13)):
+        raise ValueError("Нужны конечные значения чувствительности шлюза для SF7..SF12.")
+    if not math.isfinite(tx_power_step_db) or tx_power_step_db <= 0 or min_tx_power_dbm > tx_power_dbm:
+        raise ValueError("Некорректные пределы мощности или шаг ADR.")
+
     if not adr_enabled:
-        req_snr = snr_thresholds_db[fixed_sf]
-        margin = lb.snr_db - req_snr - adr_margin_db
+        link_margin = lb.rssi_dbm - thresholds[fixed_sf]
+        margin = link_margin - adr_margin_db
         return AdrConvergenceResult(
             distance_km=distance_km,
             adr_enabled=False,
@@ -148,12 +162,14 @@ def resolve_adr(
             snr_db=lb.snr_db,
             snr_margin_db=margin,
             n_steps=0,
-            link_feasible=(lb.snr_db >= req_snr),
+            link_feasible=link_margin >= 0,
+            rssi_dbm=lb.rssi_dbm,
+            receiver_sensitivity_dbm=thresholds[fixed_sf],
+            link_margin_db=link_margin,
         )
 
     start_sf = initial_sf_when_adr
-    req_snr = snr_thresholds_db[start_sf]
-    margin = lb.snr_db - req_snr - adr_margin_db
+    margin = lb.rssi_dbm - thresholds[start_sf] - adr_margin_db
     n_steps = math.floor(margin / 3.0)
 
     current_sf = start_sf
@@ -174,18 +190,22 @@ def resolve_adr(
 
     # Проверяем, выполняется ли условие связи при итоговом SF и итоговой мощности
     final_snr = lb.snr_db - (tx_power_dbm - current_p_tx)
-    feasible = final_snr >= snr_thresholds_db[current_sf]
+    final_rssi = lb.rssi_dbm - (tx_power_dbm - current_p_tx)
+    feasible = final_rssi >= thresholds[current_sf]
 
     # Если при слишком большом расстоянии запас отрицательный и даже на стартовом SF связи нет,
     # возвращаем SF12 и максимальную мощность
     if not feasible and current_sf < 12:
         # Подбираем минимальный SF, при котором выполняется условие связи SNR >= SNR_req(SF) (без запаса M_adr)
         for candidate_sf in range(7, 13):
-            if lb.snr_db >= snr_thresholds_db[candidate_sf]:
+            if lb.rssi_dbm >= thresholds[candidate_sf]:
                 current_sf = candidate_sf
                 current_p_tx = tx_power_dbm
                 feasible = True
                 break
+
+    final_rssi = lb.rssi_dbm - (tx_power_dbm - current_p_tx)
+    final_snr = final_rssi - lb.noise_floor_dbm
 
     return AdrConvergenceResult(
         distance_km=distance_km,
@@ -198,6 +218,9 @@ def resolve_adr(
         snr_margin_db=margin,
         n_steps=n_steps,
         link_feasible=feasible,
+        rssi_dbm=final_rssi,
+        receiver_sensitivity_dbm=thresholds[current_sf],
+        link_margin_db=final_rssi - thresholds[current_sf],
     )
 
 

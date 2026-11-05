@@ -1,0 +1,157 @@
+/* ASCII terminal skin. Native Streamlit widgets retain their keyboard controls. */
+:root {
+  --terminal-bg: #181818;
+  --terminal-surface: #1f1f1f;
+  --terminal-text: #e8ece5;
+  --terminal-muted: #a6b09f;
+  --terminal-accent: #b6ef95;
+  --terminal-line: #424a40;
+}
+
+.terminal-header {
+  position: relative;
+  border: 1px solid var(--terminal-line);
+  padding: 24px;
+  margin-bottom: 24px;
+  background: var(--terminal-bg);
+}
+.terminal-header::before,
+.terminal-header::after,
+.terminal-footer::before,
+.terminal-footer::after {
+  position: absolute;
+  color: var(--terminal-accent);
+  background: var(--terminal-bg);
+  font-size: 16px;
+  line-height: 16px;
+  content: "+";
+}
+.terminal-header::before { top: -8px; left: -5px; }
+.terminal-header::after { top: -8px; right: -5px; }
+.terminal-footer::before { bottom: -8px; left: -5px; }
+.terminal-footer::after { bottom: -8px; right: -5px; }
+.terminal-kicker {
+  color: var(--terminal-muted);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: .08em;
+  margin-bottom: 16px;
+}
+.terminal-header h1 {
+  font-size: 30px;
+  line-height: 36px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  padding: 0;
+  color: var(--terminal-text);
+  text-wrap: balance;
+}
+.terminal-prompt, .terminal-cursor { color: var(--terminal-accent); }
+.terminal-description {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--terminal-muted);
+  margin: 0 0 24px;
+}
+.terminal-route {
+  color: var(--terminal-accent);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 16px;
+}
+.terminal-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  color: var(--terminal-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+.terminal-status b { color: var(--terminal-text); font-weight: 500; }
+
+[data-testid="stSidebar"] h1 { color: var(--terminal-accent); }
+[data-testid="stSidebar"] h3 { font-size: 14px; line-height: 20px; }
+[data-testid="stHeading"] h3 { text-wrap: balance; }
+[data-testid="stHeading"] h3::before { content: "// "; color: var(--terminal-accent); }
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p { color: var(--terminal-muted); }
+[data-testid="stColumn"] { min-width: 0; }
+
+[data-testid="stMetric"] {
+  position: relative;
+  background: var(--terminal-surface);
+  border: 1px solid var(--terminal-line);
+  padding: 16px;
+  min-height: 128px;
+}
+[data-testid="stMetric"]::before {
+  content: "+";
+  position: absolute;
+  left: -5px;
+  top: -10px;
+  color: var(--terminal-accent);
+  background: var(--terminal-bg);
+}
+[data-testid="stMetricLabel"] { color: var(--terminal-muted); font-size: 12px; }
+[data-testid="stMetricValue"] { color: var(--terminal-accent); }
+.st-key-terminal_metrics [data-testid="stHorizontalBlock"] {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+.st-key-terminal_metrics [data-testid="stColumn"] { width: 100%; }
+
+[data-testid="stTabs"] [role="tablist"] {
+  gap: 0;
+  border: 1px solid var(--terminal-line);
+  background: var(--terminal-surface);
+}
+[data-testid="stTabs"] [role="tab"] {
+  min-height: 48px;
+  padding: 12px 16px;
+  color: var(--terminal-muted);
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+  color: var(--terminal-accent);
+  background: #272727;
+}
+[data-testid="stTabs"] [role="tab"] p { font-size: 12px; }
+[data-testid="stButton"] button,
+[data-testid="stDownloadButton"] button {
+  border: 1px solid var(--terminal-line);
+  padding: 8px 12px;
+}
+[data-testid="stButton"] button:hover,
+[data-testid="stDownloadButton"] button:hover {
+  color: var(--terminal-accent);
+  border-color: var(--terminal-accent);
+  background: #272727;
+}
+[data-testid="stButton"] button p::before,
+[data-testid="stDownloadButton"] button p::before { content: "[ "; }
+[data-testid="stButton"] button p::after,
+[data-testid="stDownloadButton"] button p::after { content: " ]"; }
+button:focus-visible, input:focus-visible, [role="tab"]:focus-visible {
+  outline: 2px solid var(--terminal-accent);
+  outline-offset: 2px;
+}
+[data-testid="stExpander"] { border-color: var(--terminal-line); }
+[data-testid="stAlert"] { border: 1px solid var(--terminal-line); }
+[data-testid="stImage"] { border: 1px solid var(--terminal-line); }
+[data-testid="stMarkdownContainer"] hr { border-color: var(--terminal-line); border-style: dashed; }
+
+@media (max-width: 1500px) {
+  .st-key-terminal_metrics [data-testid="stHorizontalBlock"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 1000px) {
+  .st-key-terminal_metrics [data-testid="stHorizontalBlock"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .terminal-header { padding: 16px; }
+  .terminal-header h1 { font-size: 24px; line-height: 32px; }
+  .terminal-kicker { letter-spacing: 0; }
+  .terminal-status { gap: 8px 16px; }
+  .st-key-terminal_metrics [data-testid="stHorizontalBlock"] { grid-template-columns: minmax(0, 1fr); }
+}

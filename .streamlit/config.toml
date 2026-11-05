@@ -1,0 +1,47 @@
+[theme]
+base = "dark"
+primaryColor = "#b6ef95"
+backgroundColor = "#181818"
+secondaryBackgroundColor = "#1f1f1f"
+textColor = "#e8ece5"
+blueColor = "#8dc6bd"
+blueBackgroundColor = "#1f1f1f"
+blueTextColor = "#c6dacf"
+yellowColor = "#e5c58a"
+yellowBackgroundColor = "#272727"
+yellowTextColor = "#e5c58a"
+greenColor = "#b6ef95"
+greenBackgroundColor = "#1f1f1f"
+greenTextColor = "#b6ef95"
+redColor = "#ee9a8b"
+redBackgroundColor = "#272727"
+redTextColor = "#ee9a8b"
+font = "monospace"
+headingFont = "monospace"
+codeFont = "monospace"
+baseFontSize = 14
+baseFontWeight = 400
+headingFontSizes = ["30px", "24px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [600, 600, 500, 500, 500, 500]
+metricValueFontSize = "24px"
+metricValueFontWeight = 500
+baseRadius = "none"
+buttonRadius = "none"
+borderColor = "#424a40"
+showWidgetBorder = true
+showSidebarBorder = true
+dataframeBorderColor = "#424a40"
+dataframeHeaderBackgroundColor = "#272727"
+dataframeHeaderTextColor = "#b6ef95"
+chartCategoricalColors = ["#b6ef95", "#e5c58a", "#8dc6bd", "#ee9a8b", "#b9b3e2"]
+paddingTop = "1.5rem"
+paddingBottom = "2rem"
+
+[theme.sidebar]
+backgroundColor = "#1f1f1f"
+secondaryBackgroundColor = "#272727"
+headingFontSizes = ["20px", "18px", "16px", "14px", "14px", "12px"]
+paddingTop = "1rem"
+
+[client]
+toolbarMode = "minimal"
