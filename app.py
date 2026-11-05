@@ -36,7 +36,7 @@ from src.report_export import export_p2p_report_bundle, make_analysis_figure
 
 # Настройка страницы
 st.set_page_config(
-    page_title="LoRaWAN / Energy lab",
+    page_title="LoRaWAN / модель",
     page_icon='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#181818"/><rect x="4" y="4" width="56" height="56" fill="none" stroke="#b6ef95"/><text x="10" y="42" font-family="monospace" font-size="32" fill="#b6ef95">&gt;_</text></svg>',
     layout="wide",
 )
@@ -172,7 +172,7 @@ model_status = f"{model_choice} / шаблон" if model_choice == "calibrated" 
 st.html(f"""
 <section class="terminal-header" aria-label="Модель энергопотребления LoRaWAN">
   <div class="terminal-kicker">DXL-IoT / АНАЛИТИЧЕСКАЯ МОДЕЛЬ</div>
-  <h1><span class="terminal-prompt">&gt;</span> LoRaWAN / Energy lab<span class="terminal-cursor">_</span></h1>
+  <h1><span class="terminal-prompt">&gt;</span> LoRaWAN / модель<span class="terminal-cursor">_</span></h1>
   <p class="terminal-description">Энергопотребление, радиоканал и автономность сенсорного узла.</p>
   <div class="terminal-route">{escape(route)}</div>
   <div class="terminal-status">

@@ -1,11 +1,44 @@
+# Python: caches, virtual environments, and build output
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 .venv/
 venv/
 env/
+/build/
+/dist/
+*.egg-info/
+
+# Local credentials and machine-specific settings
+.env
+.env.*
+!.env.example
+/.streamlit/secrets.toml
+/.vscode/
+/.idea/
+
+# Generated experiment and report files
+/results/
+/report_bundle.zip
+/p2p_report_bundle.zip
 *.csv
+*.log
 .ipynb_checkpoints/
+
+# Local agent tooling and external skill checkout
+/.agents/
+/.claude/
+/.codex/
+/ai-design-skills/
+
+# Operating system and Office temporary files
 .DS_Store
-.claude/
+Thumbs.db
+Desktop.ini
+~$*
